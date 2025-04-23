@@ -5,7 +5,7 @@ use geo_types::{LineString, MultiPolygon, Point, Polygon};
 use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
 use std::collections::HashMap;
-use std::{fs, vec};
+use std::vec;
 
 // --- Type Aliases ---
 type Curve = Point;
@@ -369,11 +369,7 @@ fn parse_base_properties(root: &Node) -> Result<CommonProperties> {
         .text()
         .ok_or_else(|| Error::MissingElement("座標系".to_string()))?;
     let crs_det_elem = get_child_element(root, "測地系判別").ok();
-    let crs_det = if let Some(crs_det_elem) = crs_det_elem {
-        Some(crs_det_elem.text().unwrap().to_string())
-    } else {
-        None
-    };
+    let crs_det = crs_det_elem.map(|crs_det_elem| crs_det_elem.text().unwrap().to_string());
 
     Ok(CommonProperties {
         地図名: map_name.to_string(),

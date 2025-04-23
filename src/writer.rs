@@ -14,7 +14,7 @@ pub struct FGBWriter<'a> {
 }
 impl FGBWriter<'_> {
     pub fn new(output_path: &Path) -> Result<Self> {
-        let file = File::create(&output_path)?;
+        let file = File::create(output_path)?;
         let writer = BufWriter::new(file);
 
         let mut fgb = FgbWriter::create_with_options(

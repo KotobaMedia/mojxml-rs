@@ -218,7 +218,7 @@ mod tests {
         assert!(result.is_ok());
         let iter = result.unwrap();
         let items = iter.filter_map(|r| r.ok()).collect::<Vec<_>>();
-        assert!(items.len() > 0, "Expected at least one XML file in the zip");
+        assert!(!items.is_empty(), "Expected at least one XML file in the zip");
         let names = items
             .iter()
             .map(|data| data.file_name.clone())
@@ -253,12 +253,10 @@ mod tests {
     #[test]
     fn test_iter_xml_contents_mixed_types() {
         let base_path = testdata_path();
-        let paths = vec![
-            base_path.join("46505-3411-56.xml"),
+        let paths = [base_path.join("46505-3411-56.xml"),
             base_path.join("46505-3411-1.zip"),
             base_path.join("non_existent_file.foo"),
-            base_path.join("non_existent_file.xml"),
-        ];
+            base_path.join("non_existent_file.xml")];
 
         let results: Vec<_> = paths.iter().flat_map(|p| iter_xml_contents(p)).collect();
 
@@ -289,7 +287,7 @@ mod tests {
     #[test]
     fn test_iter_xml_contents_only_zip() {
         let base_path = testdata_path();
-        let paths = vec![base_path.join("46505-3411-1.zip")];
+        let paths = [base_path.join("46505-3411-1.zip")];
         let results: Vec<_> = paths.iter().flat_map(|p| iter_xml_contents(p)).collect();
         assert!(!results.is_empty());
         assert!(results.iter().all(|r| r.is_ok()));
@@ -298,7 +296,7 @@ mod tests {
     #[test]
     fn test_iter_xml_contents_only_xml() {
         let base_path = testdata_path();
-        let paths = vec![base_path.join("46505-3411-56.xml")];
+        let paths = [base_path.join("46505-3411-56.xml")];
         let results: Vec<_> = paths.iter().flat_map(|p| iter_xml_contents(p)).collect();
         assert_eq!(results.len(), 1);
         assert!(results[0].is_ok());
@@ -314,10 +312,8 @@ mod tests {
     #[test]
     fn test_iter_xml_contents_ignore_other_files() {
         let base_path = testdata_path();
-        let paths = vec![
-            base_path.join("..").join("README.md"),
-            base_path.join("..").join("Cargo.toml"),
-        ];
+        let paths = [base_path.join("..").join("README.md"),
+            base_path.join("..").join("Cargo.toml")];
         if paths.iter().all(|p| p.exists()) {
             let results: Vec<_> = paths.iter().flat_map(|p| iter_xml_contents(p)).collect();
             assert!(results.is_empty(), "Should ignore non-XML/ZIP files");
