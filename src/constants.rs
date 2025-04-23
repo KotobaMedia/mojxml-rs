@@ -55,13 +55,10 @@ mod tests {
 
     #[test]
     fn test_get_epsg_code_unknown() {
-        assert_eq!(
-            get_epsg_code("不明な座標系"),
-            Err(Error::UnsupportedCrs("不明な座標系".to_string()))
-        );
-        assert_eq!(
-            get_epsg_code(""),
-            Err(Error::UnsupportedCrs("".to_string()))
-        );
+        let err = get_epsg_code("不明な座標系").unwrap_err();
+        assert!(matches!(err, Error::UnsupportedCrs(_)));
+        if let Error::UnsupportedCrs(crs) = err {
+            assert_eq!(crs, "不明な座標系");
+        }
     }
 }

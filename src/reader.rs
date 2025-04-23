@@ -1,11 +1,12 @@
 use std::fs::File;
-use std::io::{self, Cursor, Read, Seek};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+use tempfile::NamedTempFile;
 use zip::ZipArchive;
 
 pub struct FileData {
     pub file_name: String,
-    pub contents: Vec<u8>,
+    pub contents: NamedTempFile,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -35,9 +36,10 @@ pub fn iter_xml_contents(
 }
 
 fn read_xml_file(path: &Path) -> Result<FileData, ReaderError> {
-    let mut file = File::open(path)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
+    let mut tmp = NamedTempFile::new()?;
+    let mut src = File::open(path)?;
+    io::copy(&mut src, tmp.as_file_mut())?;
+    tmp.as_file_mut().seek(SeekFrom::Start(0))?;
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -45,84 +47,132 @@ fn read_xml_file(path: &Path) -> Result<FileData, ReaderError> {
         .to_string();
     Ok(FileData {
         file_name: name,
-        contents: buffer,
+        contents: tmp,
     })
 }
 
-fn find_xml_in_archive<R: Read + Seek>(
-    archive: &mut ZipArchive<R>,
-    results: &mut Vec<Result<FileData, ReaderError>>,
-) -> Result<(), ReaderError> {
-    for i in 0..archive.len() {
-        let mut entry = archive.by_index(i)?;
-        let entry_path = match entry.enclosed_name() {
-            Some(path) => path.to_path_buf(),
-            None => continue,
-        };
-
-        let ext = entry_path
-            .extension()
-            .and_then(|os_str| os_str.to_str())
-            .map(|s| s.to_lowercase());
-
-        match ext.as_deref() {
-            Some("xml") => {
-                let mut buffer = Vec::new();
-                match entry.read_to_end(&mut buffer) {
-                    Ok(_) => {
-                        let name = entry_path
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        results.push(Ok(FileData {
-                            file_name: name,
-                            contents: buffer,
-                        }));
-                    }
-                    Err(e) => results.push(Err(ReaderError::Io(e))),
-                }
-            }
-            Some("zip") => {
-                let mut nested_zip_data = Vec::new();
-                if entry.is_dir() {
-                    continue;
-                }
-                match entry.read_to_end(&mut nested_zip_data) {
-                    Ok(_) => {
-                        if nested_zip_data.is_empty() {
-                            continue;
-                        }
-                        let cursor = Cursor::new(nested_zip_data);
-                        match ZipArchive::new(cursor) {
-                            Ok(mut nested_archive) => {
-                                find_xml_in_archive(&mut nested_archive, results)?;
-                            }
-                            Err(e) => results.push(Err(ReaderError::Zip(e))),
-                        }
-                    }
-                    Err(e) => results.push(Err(ReaderError::Io(e))),
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(())
+// streaming ZIP/XML iterator without collecting
+struct ZipXmlIter<R: Read + Seek> {
+    archive: ZipArchive<R>,
+    index: usize,
+    nested: Option<Box<ZipXmlIter<std::fs::File>>>,
 }
 
-fn read_zip_archive(
-    path: &Path,
-) -> Result<impl Iterator<Item = Result<FileData, ReaderError>>, ReaderError> {
+impl<R: Read + Seek> ZipXmlIter<R> {
+    fn new(archive: ZipArchive<R>) -> Self {
+        ZipXmlIter {
+            archive,
+            index: 0,
+            nested: None,
+        }
+    }
+}
+
+impl<R: Read + Seek> Iterator for ZipXmlIter<R> {
+    type Item = Result<FileData, ReaderError>;
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // first, drain any nested iterator
+            if let Some(n) = &mut self.nested {
+                if let Some(item) = n.next() {
+                    return Some(item);
+                }
+                self.nested = None;
+            }
+            // if we've exhausted entries, stop
+            if self.index >= self.archive.len() {
+                return None;
+            }
+            let idx = self.index;
+            self.index += 1;
+            // pull the next entry
+            let mut entry = match self.archive.by_index(idx) {
+                Ok(e) => e,
+                Err(e) => return Some(Err(ReaderError::Zip(e))),
+            };
+            let entry_path = match entry.enclosed_name() {
+                Some(p) => p.to_path_buf(),
+                None => continue,
+            };
+            let ext = entry_path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase());
+            match ext.as_deref() {
+                Some("xml") => {
+                    // emit XML immediately
+                    match NamedTempFile::new() {
+                        Ok(mut tmp) => {
+                            if let Err(e) = io::copy(&mut entry, tmp.as_file_mut()) {
+                                return Some(Err(ReaderError::Io(e)));
+                            }
+                            if let Err(e) = tmp.as_file_mut().seek(SeekFrom::Start(0)) {
+                                return Some(Err(ReaderError::Io(e)));
+                            }
+                            let name = entry_path
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or_default()
+                                .to_string();
+                            return Some(Ok(FileData {
+                                file_name: name,
+                                contents: tmp,
+                            }));
+                        }
+                        Err(e) => return Some(Err(ReaderError::Io(e))),
+                    }
+                }
+                Some("zip") if !entry.is_dir() => {
+                    // prepare nested ZIP iterator
+                    match NamedTempFile::new() {
+                        Ok(mut tmp) => {
+                            if let Err(e) = io::copy(&mut entry, tmp.as_file_mut()) {
+                                return Some(Err(ReaderError::Io(e)));
+                            }
+                            if let Err(e) = tmp.as_file_mut().seek(SeekFrom::Start(0)) {
+                                return Some(Err(ReaderError::Io(e)));
+                            }
+                            // clone handle for ZipArchive
+                            match tmp
+                                .as_file()
+                                .try_clone()
+                                .and_then(|mut f| f.seek(SeekFrom::Start(0)).map(|_| f))
+                            {
+                                Ok(cloned_file) => match ZipArchive::new(cloned_file) {
+                                    Ok(nested_arc) => {
+                                        let mut nested_it = ZipXmlIter::new(nested_arc);
+                                        if let Some(item) = nested_it.next() {
+                                            self.nested = Some(Box::new(nested_it));
+                                            return Some(item);
+                                        } else {
+                                            continue;
+                                        }
+                                    }
+                                    Err(e) => return Some(Err(ReaderError::Zip(e))),
+                                },
+                                Err(e) => return Some(Err(ReaderError::Io(e))),
+                            }
+                        }
+                        Err(e) => return Some(Err(ReaderError::Io(e))),
+                    }
+                }
+                _ => continue,
+            }
+        }
+    }
+}
+
+// replace read_zip_archive with streaming version
+fn read_zip_archive(path: &Path) -> Result<ZipXmlIter<File>, ReaderError> {
     let file = File::open(path)?;
-    let mut archive = ZipArchive::new(file)?;
-    let mut results = Vec::new();
-    find_xml_in_archive(&mut archive, &mut results)?;
-    Ok(results.into_iter())
+    let archive = ZipArchive::new(file)?;
+    Ok(ZipXmlIter::new(archive))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::path::PathBuf;
 
     fn testdata_path() -> PathBuf {
@@ -138,8 +188,10 @@ mod tests {
         let result = read_xml_file(&path);
         assert!(result.is_ok());
         let file_data = result.unwrap();
-        assert!(!file_data.contents.is_empty());
-        assert!(String::from_utf8_lossy(&file_data.contents).contains("<"));
+        let mut buf = Vec::new();
+        file_data.contents.as_file().read_to_end(&mut buf).unwrap();
+        assert!(!buf.is_empty());
+        assert!(String::from_utf8_lossy(&buf).contains("<"));
     }
 
     #[test]
@@ -165,7 +217,14 @@ mod tests {
         assert!(first_item.is_some());
         let first_data = first_item.unwrap();
         assert!(first_data.is_ok());
-        assert!(!first_data.unwrap().contents.is_empty());
+        let mut buf = Vec::new();
+        first_data
+            .unwrap()
+            .contents
+            .as_file()
+            .read_to_end(&mut buf)
+            .unwrap();
+        assert!(!buf.is_empty());
     }
 
     #[test]
@@ -222,7 +281,15 @@ mod tests {
 
         assert!(results.len() >= 2);
         assert!(results[0].is_ok());
-        assert!(!results[0].as_ref().unwrap().contents.is_empty());
+        let mut buf = Vec::new();
+        results[0]
+            .as_ref()
+            .unwrap()
+            .contents
+            .as_file()
+            .read_to_end(&mut buf)
+            .unwrap();
+        assert!(!buf.is_empty());
         let zip_results_ok = results.iter().skip(1).any(|r| r.is_ok());
         assert!(
             zip_results_ok,

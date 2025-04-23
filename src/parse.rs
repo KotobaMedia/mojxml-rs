@@ -5,7 +5,7 @@ use geo_types::{LineString, MultiPolygon, Point, Polygon};
 use proj::Proj;
 use roxmltree::{Document, Node};
 use std::collections::HashMap;
-use std::vec;
+use std::{fs, vec};
 
 // --- Type Aliases ---
 type Curve = Point;
@@ -396,9 +396,8 @@ pub struct ParsedXML {
 
 // --- Main Parsing Function ---
 pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<ParsedXML> {
-    let xml_bytes = &file.contents;
-    let xml_text = std::str::from_utf8(xml_bytes)?;
-    let doc = Document::parse(xml_text)?;
+    let xml_text = fs::read_to_string(&file.contents)?;
+    let doc = Document::parse(&xml_text)?;
     let root = doc.root_element();
 
     let common_props = parse_base_properties(&root)?;
@@ -438,14 +437,15 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_parse_xml_content() {
         // Construct the path relative to the Cargo manifest directory
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         let xml_path = Path::new(&manifest_dir).join("testdata/46505-3411-56.xml");
-        let xml_bytes =
-            fs::read(&xml_path).expect(&format!("Failed to read XML file: {:?}", xml_path));
+        let xml_temp = NamedTempFile::new().unwrap();
+        fs::copy(&xml_path, xml_temp.path()).unwrap();
         let options = ParseOptions {
             include_arbitrary_crs: true,
             include_chikugai: true,
@@ -457,7 +457,7 @@ mod tests {
         } = parse_xml_content(
             &FileData {
                 file_name: "46505-3411-56.xml".to_string(),
-                contents: xml_bytes,
+                contents: xml_temp,
             },
             &options,
         )

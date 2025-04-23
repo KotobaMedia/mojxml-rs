@@ -1,6 +1,6 @@
 // use proj::ProjCreateError;
 
-#[derive(Debug, thiserror::Error, PartialEq)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("XML parsing error: {0}")]
     Xml(#[from] roxmltree::Error),
@@ -28,6 +28,8 @@ pub enum Error {
     UnexpectedElement(String),
     #[error("Projection error: {0}")]
     Projection(String),
+    #[error("IO error: {0}")]
+    FS(#[from] std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -1117,6 +1117,7 @@ dependencies = [
  "once_cell",
  "proj",
  "roxmltree",
+ "tempfile",
  "thiserror 1.0.69",
  "zip",
 ]

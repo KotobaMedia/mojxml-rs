@@ -33,24 +33,52 @@ impl FGBWriter<'_> {
         fgb.add_column("市区町村コード", ColumnType::String, |_, _| {});
         fgb.add_column("市区町村名", ColumnType::String, |_, _| {});
         fgb.add_column("座標系", ColumnType::String, |_, _| {});
-        fgb.add_column("測地系判別", ColumnType::String, |_, _| {});
-        fgb.add_column("測地系", ColumnType::String, |_, _| {});
+        fgb.add_column("測地系判別", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("測地系", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
         fgb.add_column("測地系変換", ColumnType::String, |_, col| {
             col.nullable = true;
         });
         fgb.add_column("筆id", ColumnType::String, |_, _| {});
-        fgb.add_column("精度区分", ColumnType::String, |_, _| {});
-        fgb.add_column("大字コード", ColumnType::String, |_, _| {});
-        fgb.add_column("丁目コード", ColumnType::String, |_, _| {});
-        fgb.add_column("小字コード", ColumnType::String, |_, _| {});
-        fgb.add_column("予備コード", ColumnType::String, |_, _| {});
-        fgb.add_column("大字名", ColumnType::String, |_, _| {});
-        fgb.add_column("丁目名", ColumnType::String, |_, _| {});
-        fgb.add_column("小字名", ColumnType::String, |_, _| {});
-        fgb.add_column("予備名", ColumnType::String, |_, _| {});
-        fgb.add_column("地番", ColumnType::String, |_, _| {});
-        fgb.add_column("座標値種別", ColumnType::String, |_, _| {});
-        fgb.add_column("筆界未定構成筆", ColumnType::String, |_, _| {});
+        fgb.add_column("精度区分", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("大字コード", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("丁目コード", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("小字コード", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("予備コード", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("大字名", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("丁目名", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("小字名", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("予備名", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("地番", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("座標値種別", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("筆界未定構成筆", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
 
         Ok(FGBWriter { fgb, writer })
     }

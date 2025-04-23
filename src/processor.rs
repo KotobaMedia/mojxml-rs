@@ -26,7 +26,7 @@ pub fn process_files(
     let xml_files = Arc::new(AtomicUsize::new(0));
 
     // XML channels
-    let (xml_tx, xml_rx) = bounded::<PathBuf>(100);
+    let (xml_tx, xml_rx) = bounded::<PathBuf>(5);
     let xml_pb = m.add(
         indicatif::ProgressBar::new(0)
             .with_style(sty.clone())
@@ -58,7 +58,7 @@ pub fn process_files(
             }
         }));
     }
-    for _ in 0..concurrency {
+    for _ in 0..5 {
         let xml_rx = xml_rx.clone();
         let parser_tx = parser_tx.clone();
         let xml_pb = xml_pb.clone();
