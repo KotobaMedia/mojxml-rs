@@ -26,14 +26,14 @@ pub fn process_files(
     let xml_files = Arc::new(AtomicUsize::new(0));
 
     // XML channels
-    let (xml_tx, xml_rx) = bounded::<PathBuf>(5);
+    let (xml_tx, xml_rx) = bounded::<PathBuf>(10);
     let xml_pb = m.add(
         indicatif::ProgressBar::new(0)
             .with_style(sty.clone())
             .with_message("unzipping"),
     );
     // Parser channels
-    let (parser_tx, parser_rx) = bounded::<FileData>(100);
+    let (parser_tx, parser_rx) = bounded::<FileData>(300);
     let parser_pb = m.add(
         indicatif::ProgressBar::new(0)
             .with_style(sty.clone())
@@ -58,7 +58,7 @@ pub fn process_files(
             }
         }));
     }
-    for _ in 0..5 {
+    for _ in 0..std::cmp::max(1, concurrency / 4) {
         let xml_rx = xml_rx.clone();
         let parser_tx = parser_tx.clone();
         let xml_pb = xml_pb.clone();
@@ -85,7 +85,7 @@ pub fn process_files(
     }
     drop(parser_tx);
 
-    for _ in 0..concurrency {
+    for _ in 0..std::cmp::max(2, concurrency - 1) {
         let parser_rx = parser_rx.clone();
         let writer_tx = writer_tx.clone();
         let parser_pb = parser_pb.clone();

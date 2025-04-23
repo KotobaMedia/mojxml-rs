@@ -27,7 +27,7 @@ pub enum Error {
     #[error("Unexpected XML element: {0}")]
     UnexpectedElement(String),
     #[error("Projection error: {0}")]
-    Projection(String),
+    Projection(#[from] proj4rs::errors::Error),
     #[error("IO error: {0}")]
     FS(#[from] std::io::Error),
 }

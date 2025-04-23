@@ -1,8 +1,8 @@
-use crate::constants::{get_epsg_code, get_xml_namespace};
+use crate::constants::{get_proj, get_xml_namespace};
 use crate::error::{Error, Result};
 use crate::reader::FileData;
 use geo_types::{LineString, MultiPolygon, Point, Polygon};
-use proj::Proj;
+use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
 use std::collections::HashMap;
 use std::{fs, vec};
@@ -41,9 +41,6 @@ pub struct CommonProperties {
     pub 座標系: String,
     pub 測地系判別: Option<String>,
 }
-
-// --- Constants ---
-const TARGET_CRS: &str = "EPSG:4326"; // WGS84
 
 #[derive(Debug, Clone)]
 pub struct ParseOptions {
@@ -176,17 +173,16 @@ fn parse_curves(
 
 fn transform_curves_crs(
     curves: &mut HashMap<String, Curve>,
-    source_crs: &str,
-    target_crs: &str,
+    source_crs: &Proj,
+    target_crs: &Proj,
 ) -> Result<()> {
-    let transformer = Proj::new_known_crs(source_crs, target_crs, None)
-        .map_err(|e| Error::Projection(e.to_string()))?;
+    // let transformer = Proj::new_known_crs(source_crs, target_crs, None)
+    //     .map_err(|e| Error::Projection(e.to_string()))?;
 
     for curve in curves.values_mut() {
-        let (new_x, new_y) = transformer
-            .convert((curve.x(), curve.y()))
-            .map_err(|e| Error::Projection(e.to_string()))?;
-        *curve = Point::new(new_x, new_y);
+        let mut point = (curve.x(), curve.y());
+        proj4rs::transform::transform(source_crs, target_crs, &mut point)?;
+        *curve = Point::new(point.0.to_degrees(), point.1.to_degrees());
     }
 
     Ok(())
@@ -404,7 +400,7 @@ pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<Pars
     let crs_string = get_child_element(&root, "座標系")?
         .text()
         .ok_or_else(|| Error::MissingElement("座標系".to_string()))?;
-    let crs = get_epsg_code(crs_string)?;
+    let crs = get_proj(crs_string)?;
     if crs.is_none() && !options.include_arbitrary_crs {
         return Ok(ParsedXML {
             file_name: file.file_name.clone(),
@@ -417,7 +413,8 @@ pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<Pars
     let points = parse_points(&spatial_element)?;
     let mut curves = parse_curves(&spatial_element, &points)?;
     if let Some(crs) = crs {
-        transform_curves_crs(&mut curves, crs, TARGET_CRS)?;
+        let tgt_crs = get_proj("WGS84")?.expect("WGS84 CRS not found");
+        transform_curves_crs(&mut curves, &crs, &tgt_crs)?;
     }
 
     let surfaces = parse_surfaces(&spatial_element, &curves)?;

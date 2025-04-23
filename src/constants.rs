@@ -1,29 +1,98 @@
 use crate::error::{Error, Result};
+use proj4rs::proj::Proj;
 
-pub fn get_epsg_code(crs_name: &str) -> Result<Option<&'static str>> {
-    match crs_name {
-        "任意座標系" => Ok(None),
-        "公共座標1系" => Ok(Some("EPSG:2443")), // JGD2000 / Japan Plane Rectangular CS I
-        "公共座標2系" => Ok(Some("EPSG:2444")), // JGD2000 / Japan Plane Rectangular CS II
-        "公共座標3系" => Ok(Some("EPSG:2445")), // JGD2000 / Japan Plane Rectangular CS III
-        "公共座標4系" => Ok(Some("EPSG:2446")), // JGD2000 / Japan Plane Rectangular CS IV
-        "公共座標5系" => Ok(Some("EPSG:2447")), // JGD2000 / Japan Plane Rectangular CS V
-        "公共座標6系" => Ok(Some("EPSG:2448")), // JGD2000 / Japan Plane Rectangular CS VI
-        "公共座標7系" => Ok(Some("EPSG:2449")), // JGD2000 / Japan Plane Rectangular CS VII
-        "公共座標8系" => Ok(Some("EPSG:2450")), // JGD2000 / Japan Plane Rectangular CS VIII
-        "公共座標9系" => Ok(Some("EPSG:2451")), // JGD2000 / Japan Plane Rectangular CS IX
-        "公共座標10系" => Ok(Some("EPSG:2452")), // JGD2000 / Japan Plane Rectangular CS X
-        "公共座標11系" => Ok(Some("EPSG:2453")), // JGD2000 / Japan Plane Rectangular CS XI
-        "公共座標12系" => Ok(Some("EPSG:2454")), // JGD2000 / Japan Plane Rectangular CS XII
-        "公共座標13系" => Ok(Some("EPSG:2455")), // JGD2000 / Japan Plane Rectangular CS XIII
-        "公共座標14系" => Ok(Some("EPSG:2456")), // JGD2000 / Japan Plane Rectangular CS XIV
-        "公共座標15系" => Ok(Some("EPSG:2457")), // JGD2000 / Japan Plane Rectangular CS XV
-        "公共座標16系" => Ok(Some("EPSG:2458")), // JGD2000 / Japan Plane Rectangular CS XVI
-        "公共座標17系" => Ok(Some("EPSG:2459")), // JGD2000 / Japan Plane Rectangular CS XVII
-        "公共座標18系" => Ok(Some("EPSG:2460")), // JGD2000 / Japan Plane Rectangular CS XVIII
-        "公共座標19系" => Ok(Some("EPSG:2461")), // JGD2000 / Japan Plane Rectangular CS XIX
-        _ => Err(Error::UnsupportedCrs(crs_name.to_string())), // Error for unsupported CRS
+static PROJ_STRS: &[(&str, &str); 20] = &[
+    ("WGS84", "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"),
+    (
+        "公共座標1系", // 2443
+        "+proj=tmerc +lat_0=33 +lon_0=129.5 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標2系", // 2444
+        "+proj=tmerc +lat_0=33 +lon_0=131 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標3系", // 2445
+        "+proj=tmerc +lat_0=36 +lon_0=132.166666666667 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標4系", // 2446
+        "+proj=tmerc +lat_0=33 +lon_0=133.5 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標5系", // 2447
+        "+proj=tmerc +lat_0=36 +lon_0=134.333333333333 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標6系", // 2448
+        "+proj=tmerc +lat_0=36 +lon_0=136 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標7系", // 2449
+        "+proj=tmerc +lat_0=36 +lon_0=137.166666666667 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標8系", // 2450
+        "+proj=tmerc +lat_0=36 +lon_0=138.5 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標9系", // 2451
+        "+proj=tmerc +lat_0=36 +lon_0=139.833333333333 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標10系", // 2452
+        "+proj=tmerc +lat_0=40 +lon_0=140.833333333333 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標11系", // 2453
+        "+proj=tmerc +lat_0=44 +lon_0=140.25 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標12系", // 2454
+        "+proj=tmerc +lat_0=44 +lon_0=142.25 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標13系", // 2455
+        "+proj=tmerc +lat_0=44 +lon_0=144.25 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標14系", // 2456
+        "+proj=tmerc +lat_0=26 +lon_0=142 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標15系", // 2457
+        "+proj=tmerc +lat_0=26 +lon_0=127.5 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標16系", // 2458
+        "+proj=tmerc +lat_0=26 +lon_0=124 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標17系", // 2459
+        "+proj=tmerc +lat_0=26 +lon_0=131 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標18系", // 2460
+        "+proj=tmerc +lat_0=20 +lon_0=136 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+    (
+        "公共座標19系", // 2461
+        "+proj=tmerc +lat_0=26 +lon_0=154 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs",
+    ),
+];
+
+pub fn get_proj(name: &str) -> Result<Option<Proj>> {
+    if name == "任意座標系" {
+        return Ok(None);
     }
+    let str = PROJ_STRS
+        .iter()
+        .find(|(n, _)| n == &name)
+        .map(|(_, s)| s)
+        .ok_or_else(|| Error::UnsupportedCrs(name.to_string()))?;
+    // We can unwrap here because if the string is in the array, it is valid
+    let proj = Proj::from_proj_string(str).unwrap();
+    Ok(Some(proj))
 }
 
 pub fn get_xml_namespace(prefix: Option<&str>) -> Option<&'static str> {
@@ -36,29 +105,4 @@ pub fn get_xml_namespace(prefix: Option<&str>) -> Option<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_get_epsg_code_valid() -> Result<()> {
-        assert_eq!(get_epsg_code("公共座標1系")?, Some("EPSG:2443"));
-        assert_eq!(get_epsg_code("公共座標10系")?, Some("EPSG:2452"));
-        assert_eq!(get_epsg_code("公共座標19系")?, Some("EPSG:2461"));
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_epsg_code_arbitrary() -> Result<()> {
-        assert_eq!(get_epsg_code("任意座標系")?, None);
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_epsg_code_unknown() {
-        let err = get_epsg_code("不明な座標系").unwrap_err();
-        assert!(matches!(err, Error::UnsupportedCrs(_)));
-        if let Error::UnsupportedCrs(crs) = err {
-            assert_eq!(crs, "不明な座標系");
-        }
-    }
-}
+mod tests {}
