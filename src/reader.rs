@@ -6,7 +6,7 @@ use zip::ZipArchive;
 
 pub struct FileData {
     pub file_name: String,
-    pub contents: NamedTempFile,
+    pub contents: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -15,6 +15,8 @@ pub enum ReaderError {
     Io(#[from] io::Error),
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
+    #[error("UTF-8 error: {0}")]
+    Utf8(#[from] std::string::FromUtf8Error),
 }
 
 pub fn iter_xml_contents(
@@ -36,10 +38,7 @@ pub fn iter_xml_contents(
 }
 
 fn read_xml_file(path: &Path) -> Result<FileData, ReaderError> {
-    let mut tmp = NamedTempFile::new()?;
-    let mut src = File::open(path)?;
-    io::copy(&mut src, tmp.as_file_mut())?;
-    tmp.as_file_mut().seek(SeekFrom::Start(0))?;
+    let contents = std::fs::read(path)?;
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -47,7 +46,7 @@ fn read_xml_file(path: &Path) -> Result<FileData, ReaderError> {
         .to_string();
     Ok(FileData {
         file_name: name,
-        contents: tmp,
+        contents: String::from_utf8(contents)?,
     })
 }
 
@@ -100,27 +99,19 @@ impl<R: Read + Seek> Iterator for ZipXmlIter<R> {
                 .map(|s| s.to_lowercase());
             match ext.as_deref() {
                 Some("xml") => {
-                    // emit XML immediately
-                    match NamedTempFile::new() {
-                        Ok(mut tmp) => {
-                            if let Err(e) = io::copy(&mut entry, tmp.as_file_mut()) {
-                                return Some(Err(ReaderError::Io(e)));
-                            }
-                            if let Err(e) = tmp.as_file_mut().seek(SeekFrom::Start(0)) {
-                                return Some(Err(ReaderError::Io(e)));
-                            }
-                            let name = entry_path
-                                .file_name()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or_default()
-                                .to_string();
-                            return Some(Ok(FileData {
-                                file_name: name,
-                                contents: tmp,
-                            }));
-                        }
-                        Err(e) => return Some(Err(ReaderError::Io(e))),
+                    let name = entry_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let mut contents = String::new();
+                    if let Err(e) = entry.read_to_string(&mut contents) {
+                        return Some(Err(ReaderError::Io(e)));
                     }
+                    return Some(Ok(FileData {
+                        file_name: name,
+                        contents,
+                    }));
                 }
                 Some("zip") if !entry.is_dir() => {
                     // prepare nested ZIP iterator
@@ -172,7 +163,6 @@ fn read_zip_archive(path: &Path) -> Result<ZipXmlIter<File>, ReaderError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
     use std::path::PathBuf;
 
     fn testdata_path() -> PathBuf {
@@ -188,10 +178,8 @@ mod tests {
         let result = read_xml_file(&path);
         assert!(result.is_ok());
         let file_data = result.unwrap();
-        let mut buf = Vec::new();
-        file_data.contents.as_file().read_to_end(&mut buf).unwrap();
-        assert!(!buf.is_empty());
-        assert!(String::from_utf8_lossy(&buf).contains("<"));
+        assert!(!file_data.contents.is_empty());
+        assert!(file_data.contents.contains("<"));
     }
 
     #[test]
@@ -217,14 +205,9 @@ mod tests {
         assert!(first_item.is_some());
         let first_data = first_item.unwrap();
         assert!(first_data.is_ok());
-        let mut buf = Vec::new();
-        first_data
-            .unwrap()
-            .contents
-            .as_file()
-            .read_to_end(&mut buf)
-            .unwrap();
-        assert!(!buf.is_empty());
+        let first_data = first_data.unwrap();
+        assert_eq!(first_data.file_name, "46505-3411-1.xml");
+        assert!(!first_data.contents.is_empty());
     }
 
     #[test]
@@ -281,14 +264,7 @@ mod tests {
 
         assert!(results.len() >= 2);
         assert!(results[0].is_ok());
-        let mut buf = Vec::new();
-        results[0]
-            .as_ref()
-            .unwrap()
-            .contents
-            .as_file()
-            .read_to_end(&mut buf)
-            .unwrap();
+        let buf = results[0].as_ref().unwrap().contents.to_string();
         assert!(!buf.is_empty());
         let zip_results_ok = results.iter().skip(1).any(|r| r.is_ok());
         assert!(

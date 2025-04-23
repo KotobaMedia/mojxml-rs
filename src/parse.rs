@@ -396,8 +396,7 @@ pub struct ParsedXML {
 
 // --- Main Parsing Function ---
 pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<ParsedXML> {
-    let xml_text = fs::read_to_string(&file.contents)?;
-    let doc = Document::parse(&xml_text)?;
+    let doc = Document::parse(&file.contents)?;
     let root = doc.root_element();
 
     let common_props = parse_base_properties(&root)?;
@@ -437,15 +436,13 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_parse_xml_content() {
         // Construct the path relative to the Cargo manifest directory
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         let xml_path = Path::new(&manifest_dir).join("testdata/46505-3411-56.xml");
-        let xml_temp = NamedTempFile::new().unwrap();
-        fs::copy(&xml_path, xml_temp.path()).unwrap();
+        let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
         let options = ParseOptions {
             include_arbitrary_crs: true,
             include_chikugai: true,
