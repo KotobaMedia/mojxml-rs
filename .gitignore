@@ -1,3 +1,4 @@
 /target
 *.fgb
 flamegraph.svg
+*.log

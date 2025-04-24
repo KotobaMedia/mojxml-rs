@@ -12,14 +12,18 @@ flatgeobuf = "4.6.0"
 geo-types = "0.7.16"
 geozero = "0.14.0"
 indicatif = "0.17.11"
-mimalloc = "0.1.46"
+log = "0.4.27"
 num_cpus = "1.16.0"
 once_cell = "1.19.0"
 proj4rs = "0.1.5"
 roxmltree = "0.20.0"
+simplelog = "0.12.2"
 tempfile = "3.19.1"
 thiserror = "1.0.63"
 zip = "2.6.1"
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { version = "0.6.0" }
 
 [profile.release]
 # debug = true

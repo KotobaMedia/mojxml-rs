@@ -1,5 +1,9 @@
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: Jemalloc = Jemalloc;
 
 mod constants;
 mod error;
@@ -10,7 +14,7 @@ mod writer;
 
 use clap::Parser;
 use parse::ParseOptions;
-use std::path::PathBuf; // Import ParseOptions
+use std::{fs::File, path::PathBuf}; // Import ParseOptions
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -34,10 +38,22 @@ struct Cli {
     /// Disable FlatGeobuf index creation (turn this off for large exports).
     #[arg(short, long, default_value_t = false)]
     disable_fgb_index: bool,
+
+    /// Enable logging. Will log to mojxml.log in the current directory.
+    #[arg(short, long, default_value_t = false)]
+    verbose: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+
+    if cli.verbose {
+        simplelog::WriteLogger::init(
+            simplelog::LevelFilter::Info,
+            simplelog::Config::default(),
+            File::create("mojxml.log")?,
+        )?;
+    }
 
     let parse_options = ParseOptions {
         include_arbitrary_crs: cli.arbitrary,
