@@ -1,5 +1,6 @@
 use crate::parse::{ParseOptions, ParsedXML};
 use crate::reader::{FileData, iter_xml_contents};
+use crate::writer::WriterOptions;
 use anyhow::Result;
 use crossbeam_channel::bounded;
 use indicatif::{MultiProgress, ProgressStyle};
@@ -14,6 +15,7 @@ pub fn process_files(
     output_path: &Path,
     src_files: Vec<PathBuf>,
     parse_options: ParseOptions,
+    write_options: WriterOptions,
 ) -> Result<usize> {
     let concurrency = num_cpus::get();
     let m = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::stdout_with_hz(2));
@@ -114,7 +116,7 @@ pub fn process_files(
         let output_path = output_path.to_path_buf();
         let writer_pb = writer_pb.clone();
         handles.push(thread::spawn(move || {
-            let mut fgb = crate::writer::FGBWriter::new(&output_path).unwrap();
+            let mut fgb = crate::writer::FGBWriter::new(&output_path, &write_options).unwrap();
             while let Ok(parsed_xml) = writer_rx.recv() {
                 let write_result = fgb.add_xml_features(parsed_xml);
                 match write_result {

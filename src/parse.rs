@@ -388,6 +388,7 @@ pub struct ParsedXML {
 
 // --- Main Parsing Function ---
 pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<ParsedXML> {
+    let file_name = file.file_name.clone();
     let doc = Document::parse(&file.contents)?;
     let root = doc.root_element();
 
@@ -399,7 +400,7 @@ pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<Pars
     let crs = get_proj(crs_string)?;
     if crs.is_none() && !options.include_arbitrary_crs {
         return Ok(ParsedXML {
-            file_name: file.file_name.clone(),
+            file_name,
             features: vec![],
             common_props,
         });
@@ -418,7 +419,7 @@ pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<Pars
 
     let features = parse_features(&subject_elem, &surfaces, options)?;
     Ok(ParsedXML {
-        file_name: file.file_name.clone(),
+        file_name,
         features,
         common_props,
     })

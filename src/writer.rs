@@ -8,12 +8,16 @@ use geo_types::Geometry;
 use std::io::{BufWriter, Write};
 use std::{fs::File, path::Path};
 
+pub struct WriterOptions {
+    pub write_index: bool,
+}
+
 pub struct FGBWriter<'a> {
     fgb: FgbWriter<'a>,
     writer: BufWriter<File>,
 }
 impl FGBWriter<'_> {
-    pub fn new(output_path: &Path) -> Result<Self> {
+    pub fn new(output_path: &Path, options: &WriterOptions) -> Result<Self> {
         let file = File::create(output_path)?;
         let writer = BufWriter::new(file);
 
@@ -25,6 +29,7 @@ impl FGBWriter<'_> {
                     code: 4326,
                     ..Default::default()
                 },
+                write_index: options.write_index,
                 ..Default::default()
             },
         )?;
@@ -218,7 +223,7 @@ mod tests {
             },
         };
         let output_path = testdata_path().join("output.fgb");
-        let mut fgb = FGBWriter::new(&output_path)?;
+        let mut fgb = FGBWriter::new(&output_path, &WriterOptions { write_index: true })?;
         fgb.add_xml_features(parsed)?;
         fgb.flush()?;
         Ok(())

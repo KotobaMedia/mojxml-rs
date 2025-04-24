@@ -1,3 +1,6 @@
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod constants;
 mod error;
 mod parse;
@@ -27,6 +30,10 @@ struct Cli {
     /// Include features marked as outside district ("地区外") or separate drawing ("別図").
     #[arg(short, long, default_value_t = false)]
     chikugai: bool,
+
+    /// Disable FlatGeobuf index creation (turn this off for large exports).
+    #[arg(short, long, default_value_t = false)]
+    disable_fgb_index: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,10 +43,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_arbitrary_crs: cli.arbitrary,
         include_chikugai: cli.chikugai,
     };
+    let write_options = writer::WriterOptions {
+        write_index: !cli.disable_fgb_index,
+    };
 
     println!("Processing files with options: {:?}...", parse_options);
 
-    let file_count = processor::process_files(&cli.dst_file, cli.src_files, parse_options)?;
+    let file_count =
+        processor::process_files(&cli.dst_file, cli.src_files, parse_options, write_options)?;
 
     println!("Finished processing {} XML file(s).", file_count);
     println!("Destination: {:?}", cli.dst_file);
