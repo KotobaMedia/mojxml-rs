@@ -66,8 +66,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(temp_dir) = &cli.temp_dir {
-        fs::create_dir_all(&temp_dir)?;
-        tempfile::env::override_temp_dir(&temp_dir).expect("Failed to set temporary directory");
+        fs::create_dir_all(temp_dir)?;
+        tempfile::env::override_temp_dir(temp_dir).expect("Failed to set temporary directory");
     }
 
     let parse_options = ParseOptions {
