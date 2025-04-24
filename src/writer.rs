@@ -40,12 +40,6 @@ impl FGBWriter<'_> {
         fgb.add_column("測地系判別", ColumnType::String, |_, col| {
             col.nullable = true;
         });
-        fgb.add_column("測地系", ColumnType::String, |_, col| {
-            col.nullable = true;
-        });
-        fgb.add_column("測地系変換", ColumnType::String, |_, col| {
-            col.nullable = true;
-        });
         fgb.add_column("筆id", ColumnType::String, |_, _| {});
         fgb.add_column("精度区分", ColumnType::String, |_, col| {
             col.nullable = true;
