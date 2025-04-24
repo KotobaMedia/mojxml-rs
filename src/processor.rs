@@ -95,6 +95,8 @@ pub fn process_files(
                         }
                     }
                 }
+                // Increment the unzipping progress bar when we're done with all the
+                // files in a file.
                 xml_pb.inc(1);
             }
         }));

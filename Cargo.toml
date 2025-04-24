@@ -1,5 +1,6 @@
 [package]
 name = "mojxml-rs"
+authors = ["Keitaroh Kobayashi <keita@kotobamedia.com>"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"

@@ -2,3 +2,4 @@
 *.fgb
 flamegraph.svg
 *.log
+tmp
