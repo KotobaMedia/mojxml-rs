@@ -7,6 +7,8 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 mod constants;
 mod error;
+mod geo;
+mod outline_feature;
 mod parse;
 mod processor;
 mod reader;
@@ -29,6 +31,11 @@ struct Cli {
     /// Input MOJ XML file paths (.xml or .zip).
     #[arg(required = true, num_args = 1..)]
     src_files: Vec<PathBuf>,
+
+    /// Output FlatGeobuf file path containing the calculated outline based on the XML files.
+    /// This is extremely experimental. Use at your own risk.
+    #[arg(short, long)]
+    dst_xml_outline: Option<PathBuf>,
 
     /// Include features from arbitrary coordinate systems (unmapped files) ("任意座標系").
     #[arg(short, long, default_value_t = false)]
@@ -80,11 +87,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting processing files...");
 
-    let file_count =
-        processor::process_files(&cli.dst_file, cli.src_files, parse_options, write_options)?;
+    let outline_path = cli.dst_xml_outline.as_deref();
+
+    let file_count = processor::process_files(
+        &cli.dst_file,
+        cli.src_files,
+        parse_options,
+        write_options,
+        outline_path,
+    )?;
 
     println!("Finished processing {} XML file(s).", file_count);
     println!("Destination: {}", cli.dst_file.display());
+
+    if let Some(outline_path) = outline_path {
+        println!("Outline features written to: {}", outline_path.display());
+    }
 
     Ok(())
 }

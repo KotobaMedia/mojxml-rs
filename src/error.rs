@@ -22,6 +22,8 @@ pub enum Error {
     Projection(#[from] proj4rs::errors::Error),
     #[error("IO error: {0}")]
     FS(#[from] std::io::Error),
+    #[error("Parsing integer failed: {0}")]
+    ParseInt(#[from] std::num::ParseIntError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

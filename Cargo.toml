@@ -10,6 +10,7 @@ anyhow = "1.0.98"
 clap = { version = "4.5.37", features = ["derive"] }
 crossbeam-channel = "0.5.15"
 flatgeobuf = "4.6.0"
+geo = "0.30.0"
 geo-types = "0.7.16"
 geozero = "0.14.0"
 indicatif = "0.17.11"
