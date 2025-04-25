@@ -1,5 +1,7 @@
 use crate::constants::{get_proj, get_xml_namespace};
 use crate::error::{Error, Result};
+use crate::geo::point_on_surface;
+use crate::impl_fgb_columnar;
 use crate::reader::FileData;
 use geo_types::{LineString, MultiPolygon, Point, Polygon};
 use proj4rs::proj::Proj;
@@ -17,14 +19,49 @@ pub struct Feature {
     pub props: FeatureProperties,
 }
 
+impl_fgb_columnar! {
+    for Feature {
+        { name: "地図名", field: 地図名, ctype: String, nullable: false },
+        { name: "市区町村コード", field: 市区町村コード, ctype: UInt, nullable: false },
+        { name: "市区町村名", field: 市区町村名, ctype: String, nullable: false },
+        { name: "座標系", field: 座標系, ctype: String, nullable: false },
+        { name: "測地系判別", field: 測地系判別, ctype: String, nullable: true },
+
+        { name: "筆id", field: 筆id, ctype: String, nullable: true },
+        { name: "精度区分", field: 精度区分, ctype: String, nullable: true },
+        { name: "大字コード", field: 大字コード, ctype: UInt, nullable: true },
+        { name: "丁目コード", field: 丁目コード, ctype: UInt, nullable: true },
+        { name: "小字コード", field: 小字コード, ctype: UInt, nullable: true },
+        { name: "予備コード", field: 予備コード, ctype: UInt, nullable: true },
+        { name: "大字名", field: 大字名, ctype: String, nullable: true },
+        { name: "丁目名", field: 丁目名, ctype: String, nullable: true },
+        { name: "小字名", field: 小字名, ctype: String, nullable: true },
+        { name: "予備名", field: 予備名, ctype: String, nullable: true },
+        { name: "地番", field: 地番, ctype: String, nullable: true },
+        { name: "座標値種別", field: 座標値種別, ctype: String, nullable: true },
+        { name: "筆界未定構成筆", field: 筆界未定構成筆, ctype: String, nullable: true },
+
+        { name: "代表点緯度", field: 代表点緯度, ctype: Double, nullable: false },
+        { name: "代表点経度", field: 代表点経度, ctype: Double, nullable: false },
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FeatureProperties {
+    // common props
+    pub 地図名: String,
+    pub 市区町村コード: u32,
+    pub 市区町村名: String,
+    pub 座標系: String,
+    pub 測地系判別: Option<String>,
+
+    // props specific to each feature
     pub 筆id: String,
     pub 精度区分: Option<String>,
-    pub 大字コード: Option<String>,
-    pub 丁目コード: Option<String>,
-    pub 小字コード: Option<String>,
-    pub 予備コード: Option<String>,
+    pub 大字コード: Option<u32>,
+    pub 丁目コード: Option<u32>,
+    pub 小字コード: Option<u32>,
+    pub 予備コード: Option<u32>,
     pub 大字名: Option<String>,
     pub 丁目名: Option<String>,
     pub 小字名: Option<String>,
@@ -32,11 +69,14 @@ pub struct FeatureProperties {
     pub 地番: Option<String>,
     pub 座標値種別: Option<String>,
     pub 筆界未定構成筆: Option<String>,
+
+    pub 代表点緯度: f64,
+    pub 代表点経度: f64,
 }
 
 pub struct CommonProperties {
     pub 地図名: String,
-    pub 市区町村コード: String,
+    pub 市区町村コード: u32,
     pub 市区町村名: String,
     pub 座標系: String,
     pub 測地系判別: Option<String>,
@@ -293,6 +333,7 @@ fn parse_surfaces(
 fn parse_features(
     subject_elem: &Node,
     surfaces: &HashMap<String, Surface>,
+    common_props: &CommonProperties,
     options: &ParseOptions,
 ) -> Result<Vec<Feature>> {
     let mut features: Vec<Feature> = Vec::new();
@@ -333,15 +374,32 @@ fn parse_features(
             }
         }
 
+        let geometry = geometry.ok_or_else(|| Error::MissingElement("geometry".to_string()))?;
+        let point = point_on_surface(&geometry);
+
         features.push(Feature {
-            geometry: geometry.ok_or_else(|| Error::MissingElement("geometry".to_string()))?,
+            geometry,
             props: FeatureProperties {
+                地図名: common_props.地図名.clone(),
+                市区町村コード: common_props.市区町村コード,
+                市区町村名: common_props.市区町村名.clone(),
+                座標系: common_props.座標系.clone(),
+                測地系判別: common_props.測地系判別.clone(),
+
                 筆id: fude_id.to_string(),
                 精度区分: prop_map.remove("精度区分"),
-                大字コード: prop_map.remove("大字コード"),
-                丁目コード: prop_map.remove("丁目コード"),
-                小字コード: prop_map.remove("小字コード"),
-                予備コード: prop_map.remove("予備コード"),
+                大字コード: prop_map
+                    .remove("大字コード")
+                    .and_then(|s| s.parse::<u32>().ok()),
+                丁目コード: prop_map
+                    .remove("丁目コード")
+                    .and_then(|s| s.parse::<u32>().ok()),
+                小字コード: prop_map
+                    .remove("小字コード")
+                    .and_then(|s| s.parse::<u32>().ok()),
+                予備コード: prop_map
+                    .remove("予備コード")
+                    .and_then(|s| s.parse::<u32>().ok()),
                 大字名: prop_map.remove("大字名"),
                 丁目名: prop_map.remove("丁目名"),
                 小字名: prop_map.remove("小字名"),
@@ -349,13 +407,16 @@ fn parse_features(
                 地番: prop_map.remove("地番"),
                 座標値種別: prop_map.remove("座標値種別"),
                 筆界未定構成筆: prop_map.remove("筆界未定構成筆"),
+
+                代表点緯度: point.y(),
+                代表点経度: point.x(),
             },
         });
     }
     Ok(features)
 }
 
-fn parse_base_properties(root: &Node) -> Result<CommonProperties> {
+fn parse_common_properties(root: &Node) -> Result<CommonProperties> {
     let map_name = get_child_element(root, "地図名")?
         .text()
         .ok_or_else(|| Error::MissingElement("地図名".to_string()))?;
@@ -373,7 +434,7 @@ fn parse_base_properties(root: &Node) -> Result<CommonProperties> {
 
     Ok(CommonProperties {
         地図名: map_name.to_string(),
-        市区町村コード: city_code.to_string(),
+        市区町村コード: city_code.parse()?,
         市区町村名: city_name.to_string(),
         座標系: crs.to_string(),
         測地系判別: crs_det,
@@ -383,7 +444,6 @@ fn parse_base_properties(root: &Node) -> Result<CommonProperties> {
 pub struct ParsedXML {
     pub file_name: String,
     pub features: Vec<Feature>,
-    pub common_props: CommonProperties,
 }
 
 // --- Main Parsing Function ---
@@ -392,7 +452,7 @@ pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<Pars
     let doc = Document::parse(&file.contents)?;
     let root = doc.root_element();
 
-    let common_props = parse_base_properties(&root)?;
+    let common_props = parse_common_properties(&root)?;
 
     let crs_string = get_child_element(&root, "座標系")?
         .text()
@@ -402,7 +462,6 @@ pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<Pars
         return Ok(ParsedXML {
             file_name,
             features: vec![],
-            common_props,
         });
     }
 
@@ -417,11 +476,10 @@ pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<Pars
     let surfaces = parse_surfaces(&spatial_element, &curves)?;
     let subject_elem = get_child_element(&root, "主題属性")?;
 
-    let features = parse_features(&subject_elem, &surfaces, options)?;
+    let features = parse_features(&subject_elem, &surfaces, &common_props, options)?;
     Ok(ParsedXML {
         file_name,
         features,
-        common_props,
     })
 }
 
@@ -444,7 +502,6 @@ mod tests {
         let ParsedXML {
             file_name: _,
             features,
-            common_props,
         } = parse_xml_content(
             &FileData {
                 file_name: "46505-3411-56.xml".to_string(),
@@ -453,12 +510,13 @@ mod tests {
             &options,
         )
         .expect("Failed to parse XML");
-        assert_eq!(common_props.地図名, "AYA1anbou22B04_2000");
-        assert_eq!(common_props.市区町村コード, "46505");
-        assert_eq!(common_props.市区町村名, "熊毛郡屋久島町");
 
         assert_eq!(features.len(), 2994);
         let feature = &features[0];
+        assert_eq!(feature.props.地図名, "AYA1anbou22B04_2000");
+        assert_eq!(feature.props.市区町村コード, 46505);
+        assert_eq!(feature.props.市区町村名, "熊毛郡屋久島町");
+
         assert_eq!(feature.props.筆id, "H000000001");
         assert_eq!(feature.props.地番, Some("1".to_string()));
     }

@@ -1,3 +1,4 @@
+use crate::outline_feature::{calculate_feature_outline};
 use crate::parse::{ParseOptions, ParsedXML};
 use crate::reader::{FileData, iter_xml_contents};
 use crate::writer::WriterOptions;
@@ -17,6 +18,7 @@ pub fn process_files(
     src_files: Vec<PathBuf>,
     parse_options: ParseOptions,
     write_options: WriterOptions,
+    outline_output_path: Option<&Path>,
 ) -> Result<usize> {
     let concurrency = num_cpus::get();
     let m = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::stdout_with_hz(2));
@@ -43,12 +45,26 @@ pub fn process_files(
             .with_message("XML parse"),
     );
     // Writer channels
-    let (writer_tx, writer_rx) = bounded::<ParsedXML>(1);
+    let (writer_tx, writer_rx) = bounded::<Arc<ParsedXML>>(1);
     let writer_pb = m.add(
         indicatif::ProgressBar::new(0)
             .with_style(sty.clone())
             .with_message("FGB write"),
     );
+
+    // We'll collect all parsed XML data if a outline is requested
+    let calculate_xml_outline = outline_output_path.is_some();
+    let (outline_writer_tx, outline_writer_rx) = bounded::<Arc<ParsedXML>>(1);
+    let mut outline_writer_pb: Option<_> = None;
+    if calculate_xml_outline {
+        outline_writer_pb = Some(
+            m.add(
+                indicatif::ProgressBar::new(0)
+                    .with_style(sty.clone())
+                    .with_message("outline out"),
+            ),
+        );
+    }
 
     let start = Instant::now();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
@@ -106,8 +122,12 @@ pub fn process_files(
     for i in 0..std::cmp::max(2, concurrency - 1) {
         let parser_rx = parser_rx.clone();
         let writer_tx = writer_tx.clone();
+        let outline_writer_tx = outline_writer_tx.clone();
+
         let parser_pb = parser_pb.clone();
         let writer_pb = writer_pb.clone();
+        let outline_writer_pb = outline_writer_pb.clone();
+
         let options = parse_options.clone();
         handles.push(thread::spawn(move || {
             while let Ok(file_data) = parser_rx.recv() {
@@ -115,6 +135,11 @@ pub fn process_files(
                 let parsed_xml = crate::parse::parse_xml_content(&file_data, &options);
                 match parsed_xml {
                     Ok(parsed) => {
+                        let parsed = Arc::new(parsed);
+                        if calculate_xml_outline {
+                            outline_writer_pb.as_ref().unwrap().inc_length(1);
+                            outline_writer_tx.send(parsed.clone()).unwrap();
+                        }
                         info!("[XML {:>2}] Parsed file: {}", i, file_data.file_name);
                         writer_pb.inc_length(1);
                         parser_pb.inc(1);
@@ -133,15 +158,18 @@ pub fn process_files(
         }));
     }
     drop(writer_tx);
+    drop(outline_writer_tx);
 
     {
         let output_path = output_path.to_path_buf();
         let writer_pb = writer_pb.clone();
+        let write_options = write_options.clone();
+
         handles.push(thread::spawn(move || {
             let mut fgb = crate::writer::FGBWriter::new(&output_path, &write_options).unwrap();
             while let Ok(parsed_xml) = writer_rx.recv() {
                 info!("[FGB] Adding features from file: {}", parsed_xml.file_name);
-                let write_result = fgb.add_xml_features(parsed_xml);
+                let write_result = fgb.add_features(&parsed_xml.features);
                 match write_result {
                     Ok(_) => {
                         writer_pb.inc(1);
@@ -156,10 +184,59 @@ pub fn process_files(
             info!("[FGB] Finished writing file: {}", output_path.display());
         }));
     }
+
+    if calculate_xml_outline {
+        let outline_writer_pb = outline_writer_pb.unwrap().clone();
+        let outline_output_path = outline_output_path.unwrap().to_path_buf();
+
+        handles.push(thread::spawn(move || {
+            let mut fgb =
+                crate::writer::FGBWriter::new(&outline_output_path, &write_options).unwrap();
+            while let Ok(parsed_xml) = outline_writer_rx.recv() {
+                info!(
+                    "[outline] Adding features from file: {}",
+                    parsed_xml.file_name
+                );
+                let outline_feature = calculate_feature_outline(&parsed_xml);
+                if outline_feature.is_err() {
+                    error!(
+                        "[outline] Error calculating outline for file {}: {}",
+                        parsed_xml.file_name,
+                        outline_feature.err().unwrap()
+                    );
+                    continue;
+                }
+                let write_result = fgb.add_features(&[outline_feature.unwrap()]);
+                match write_result {
+                    Ok(_) => {
+                        outline_writer_pb.inc(1);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Error writing file {}: {}",
+                            outline_output_path.display(),
+                            e
+                        );
+                    }
+                }
+            }
+            info!(
+                "[outline] Starting output file: {}",
+                outline_output_path.display()
+            );
+            fgb.flush().unwrap();
+            info!(
+                "[outline] Finished writing file: {}",
+                outline_output_path.display()
+            );
+        }));
+    }
+
     let _ = handles
         .into_iter()
         .map(|h| h.join().expect("Thread panicked"))
         .collect::<Vec<_>>();
+
     let elapsed = start.elapsed();
 
     xml_pb.finish();
