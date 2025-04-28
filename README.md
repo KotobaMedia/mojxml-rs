@@ -12,6 +12,19 @@
 * 複数入力ファイルが統合されて一つの出力ファイルになります
 * Windows, Linux, macOS それぞれの OS で実行できるバイナリとして提供しています (work in progress)
 
+## インストール方法
+
+このツールは Rust で書かれていますが、コンパイル済みバイナリも下記のアーキテクチャで用意しています。
+
+* macOS (Apple Silicon)
+* Windows
+* Linux (x86_64)
+
+[最新の Releases](https://github.com/KotobaMedia/mojxml-rs/releases) から利用環境の zip アーカイブをダウンロードしていただき、解凍したらコマンドラインで実行できます。お困りの方は [GitHub Issues](https://github.com/KotobaMedia/mojxml-rs/issues) で詳細を教えて下さい。
+
+> [!NOTE]
+> macOS の場合は Gatekeeper の設定の関係で実行できない場合があります。次リリースには改善する予定ですが、今のところは `xattr -d com.apple.quarantine ./mojxml-rs` を1回実行してたら `./mojxml-rs` を通常通り実行できるようになります。
+
 ## 使い方
 
 ```
@@ -55,3 +68,7 @@ mojxml-rs ./moj-2025-46.fgb ../dl-tool/zips/46*.zip
 * `FGB write` は FlatGeobuf の書き込みを指します。このツールの場合は、メモリ上に書き込んで、すべての処理が完了してからディスクに書き出します。
 
 より詳細なログがほしい場合は `--verbose` で実行すると `mojxml.log` ファイルに個別ファイルの読み込み・書き込み状況をログ形式で出力します。
+
+## ライセンス
+
+このツールのソースコードは MIT ライセンスで公開しています。
