@@ -6,7 +6,10 @@ use flatgeobuf::{
 };
 use geo_types::Geometry;
 use std::io::{BufWriter, Write};
-use std::{fs::File, path::Path};
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 pub struct WriterOptions {
     pub write_index: bool,
@@ -15,6 +18,8 @@ pub struct WriterOptions {
 pub struct FGBWriter<'a> {
     fgb: FgbWriter<'a>,
     writer: BufWriter<File>,
+    output_path: PathBuf,
+    has_features: bool,
 }
 impl FGBWriter<'_> {
     pub fn new(output_path: &Path, options: &WriterOptions) -> Result<Self> {
@@ -78,12 +83,18 @@ impl FGBWriter<'_> {
             col.nullable = true;
         });
 
-        Ok(FGBWriter { fgb, writer })
+        Ok(FGBWriter {
+            fgb,
+            writer,
+            output_path: output_path.to_path_buf(),
+            has_features: false,
+        })
     }
 
     pub fn add_xml_features(&mut self, parsed: ParsedXML) -> Result<()> {
         // Write each feature, consuming the parsed data
         for feature in parsed.features {
+            self.has_features = true;
             let geometry: Geometry<f64> = feature.geometry.into();
             self.fgb.add_feature_geom(geometry, |feat| {
                 feat.property(
@@ -174,10 +185,24 @@ impl FGBWriter<'_> {
     /// Flush the writer and finalize the FlatGeobuf file.
     /// This method must be called to ensure all data is written to the file.
     /// You cannot add any more features after calling this method.
-    pub fn flush(mut self) -> Result<()> {
-        self.fgb.write(&mut self.writer)?;
-        self.writer.flush()?;
-        Ok(())
+    /// If no features were added, the file will be removed.
+    /// The return value indicates whether the file was created (true) or not (false).
+    pub fn flush(mut self) -> Result<bool> {
+        if self.has_features {
+            self.fgb.write(&mut self.writer)?;
+            self.writer.flush()?;
+            Ok(true)
+        } else {
+            // Drop the writer to close the file before removing it
+            drop(self.writer);
+            // Try to remove the file, ignore "not exists" errors
+            match std::fs::remove_file(&self.output_path) {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+            Ok(false)
+        }
     }
 }
 
@@ -220,6 +245,39 @@ mod tests {
         let mut fgb = FGBWriter::new(&output_path, &WriterOptions { write_index: true })?;
         fgb.add_xml_features(parsed)?;
         fgb.flush()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_features_no_file() -> Result<()> {
+        let parsed = ParsedXML {
+            file_name: "test_empty.xml".to_string(),
+            features: vec![], // Empty features array
+            common_props: CommonProperties {
+                地図名: "テスト地図".to_string(),
+                市区町村コード: "00000".to_string(),
+                市区町村名: "テスト市".to_string(),
+                座標系: "公共座標1系".to_string(),
+                測地系判別: Some("変換".to_string()),
+            },
+        };
+        let output_path = testdata_path().join("output_empty.fgb");
+
+        // Make sure the file doesn't exist before the test
+        if output_path.exists() {
+            std::fs::remove_file(&output_path)?;
+        }
+
+        let mut fgb = FGBWriter::new(&output_path, &WriterOptions { write_index: true })?;
+        fgb.add_xml_features(parsed)?;
+        fgb.flush()?;
+
+        // Verify the file was not created/was removed
+        assert!(
+            !output_path.exists(),
+            "File should not exist when there are no features"
+        );
+
         Ok(())
     }
 }

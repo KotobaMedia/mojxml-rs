@@ -7,7 +7,7 @@ use indicatif::{MultiProgress, ProgressStyle};
 use log::{error, info};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI8, AtomicUsize, Ordering};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -27,6 +27,7 @@ pub fn process_files(
     .progress_chars("##-");
 
     let xml_files = Arc::new(AtomicUsize::new(0));
+    let has_features = Arc::new(AtomicI8::new(0));
 
     // XML channels
     let (xml_tx, xml_rx) = unbounded::<PathBuf>();
@@ -137,6 +138,7 @@ pub fn process_files(
     {
         let output_path = output_path.to_path_buf();
         let writer_pb = writer_pb.clone();
+        let has_features = has_features.clone();
         handles.push(thread::spawn(move || {
             let mut fgb = crate::writer::FGBWriter::new(&output_path, &write_options).unwrap();
             while let Ok(parsed_xml) = writer_rx.recv() {
@@ -152,8 +154,14 @@ pub fn process_files(
                 }
             }
             info!("[FGB] Starting output file: {}", output_path.display());
-            fgb.flush().unwrap();
-            info!("[FGB] Finished writing file: {}", output_path.display());
+            let created_file = fgb.flush().unwrap();
+            if !created_file {
+                info!("[FGB] No features written");
+                has_features.fetch_sub(1, Ordering::Relaxed);
+            } else {
+                info!("[FGB] Finished writing file: {}", output_path.display());
+                has_features.fetch_add(1, Ordering::Relaxed);
+            }
         }));
     }
     let _ = handles
@@ -171,6 +179,10 @@ pub fn process_files(
         elapsed.as_secs(),
         elapsed.subsec_millis()
     );
+
+    if has_features.load(Ordering::Relaxed) <= 0 {
+        eprintln!("Empty output file: {}", output_path.display());
+    }
 
     Ok(xml_files.load(Ordering::Relaxed))
 }
