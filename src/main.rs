@@ -39,10 +39,6 @@ struct Cli {
     #[arg(short, long, default_value_t = false)]
     chikugai: bool,
 
-    /// Disable FlatGeobuf index creation (turn this off for large exports).
-    #[arg(short, long, default_value_t = false)]
-    disable_fgb_index: bool,
-
     /// Enable logging. Will log to mojxml.log in the current directory.
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
@@ -74,14 +70,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_arbitrary_crs: cli.arbitrary,
         include_chikugai: cli.chikugai,
     };
-    let write_options = writer::WriterOptions {
-        write_index: !cli.disable_fgb_index,
-    };
 
     println!("Starting processing files...");
 
-    let file_count =
-        processor::process_files(&cli.dst_file, cli.src_files, parse_options, write_options)?;
+    let file_count = processor::process_files(&cli.dst_file, cli.src_files, parse_options)?;
 
     println!("Finished processing {} XML file(s).", file_count);
     println!("Destination: {}", cli.dst_file.display());
