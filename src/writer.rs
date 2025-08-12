@@ -1,13 +1,13 @@
 use crate::parse::{FeatureProperties, ParsedXML};
 use anyhow::Result;
-use geo_types::MultiPolygon;
+use geo_types::Polygon;
 use geoparquet_batch_writer::{BatchConfig, GeoParquetBatchWriter, GeoParquetRowData};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, GeoParquetRowData)]
 struct OutputRow {
     #[geo(geometry)]
-    geom: MultiPolygon<f64>,
+    geom: Polygon<f64>,
 
     地図名: String,
     市区町村コード: String,
@@ -26,6 +26,9 @@ struct OutputRow {
     予備名: Option<String>,
     地番: String,
     座標値種別: Option<String>,
+
+    代表点緯度: f64,
+    代表点経度: f64,
 }
 
 pub struct Writer {
@@ -52,7 +55,8 @@ impl Writer {
         // Write each feature, consuming the parsed data
         for feature in parsed.features {
             self.has_features = true;
-            let geometry: MultiPolygon<f64> = feature.geometry.into();
+            let point_on_polygon = feature.point_on_polygon()?;
+            let geometry: Polygon<f64> = feature.geometry.into();
 
             let FeatureProperties {
                 筆id,
@@ -89,6 +93,8 @@ impl Writer {
                 予備名,
                 地番,
                 座標値種別,
+                代表点緯度: point_on_polygon.y(),
+                代表点経度: point_on_polygon.x(),
             };
             self.internal_writer.add_row(row)?;
         }
@@ -121,7 +127,7 @@ impl Writer {
 
 #[cfg(test)]
 mod tests {
-    use geo_types::{MultiPolygon, polygon};
+    use geo_types::polygon;
 
     use crate::parse::{CommonProperties, Feature, FeatureProperties};
 
@@ -137,13 +143,13 @@ mod tests {
         let parsed = ParsedXML {
             file_name: "test.xml".to_string(),
             features: vec![Feature {
-                geometry: MultiPolygon::from(vec![polygon![
+                geometry: polygon![
                     (x: 0.0, y: 0.0),
                     (x: 1.0, y: 0.0),
                     (x: 1.0, y: 1.0),
                     (x: 0.0, y: 1.0),
                     (x: 0.0, y: 0.0)
-                ]]),
+                ],
                 props: FeatureProperties::default(),
             }],
             common_props: CommonProperties {

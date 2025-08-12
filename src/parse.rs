@@ -1,7 +1,8 @@
 use crate::constants::{get_proj, get_xml_namespace};
 use crate::error::{Error, Result};
 use crate::reader::FileData;
-use geo_types::{LineString, MultiPolygon, Point, Polygon};
+use geo_types::{LineString, Point, Polygon};
+use polylabel::polylabel;
 use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
 use std::collections::HashMap;
@@ -9,12 +10,19 @@ use std::vec;
 
 // --- Type Aliases ---
 type Curve = Point;
-type Surface = MultiPolygon;
+type Surface = Polygon;
 
 #[derive(Debug, Clone)]
 pub struct Feature {
-    pub geometry: MultiPolygon,
+    pub geometry: Polygon,
     pub props: FeatureProperties,
+}
+
+impl Feature {
+    pub fn point_on_polygon(&self) -> Result<Point<f64>> {
+        let pop = polylabel(&self.geometry, &0.001)?;
+        Ok(pop)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -296,7 +304,7 @@ fn parse_surfaces(
 
         surfaces.insert(
             surface_id.to_string(),
-            MultiPolygon::new(vec![Polygon::new(exterior_ring, interior_rings)]),
+            Polygon::new(exterior_ring, interior_rings),
         );
     }
 
@@ -319,7 +327,7 @@ fn parse_features(
                 attribute: "id".to_string(),
             })?;
 
-        let mut geometry: Option<MultiPolygon> = None;
+        let mut geometry: Option<Polygon> = None;
         let mut prop_map: HashMap<String, String> = HashMap::new();
         for entry in fude.children().filter(|child| child.is_element()) {
             let name = entry.tag_name().name();
