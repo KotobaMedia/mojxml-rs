@@ -16,17 +16,16 @@ struct OutputRow {
     測地系判別: Option<String>,
     筆id: String,
     精度区分: Option<String>,
-    大字コード: Option<String>,
-    丁目コード: Option<String>,
-    小字コード: Option<String>,
-    予備コード: Option<String>,
+    大字コード: String,
+    丁目コード: String,
+    小字コード: String,
+    予備コード: String,
     大字名: Option<String>,
     丁目名: Option<String>,
     小字名: Option<String>,
     予備名: Option<String>,
-    地番: Option<String>,
+    地番: String,
     座標値種別: Option<String>,
-    筆界未定構成筆: Option<String>,
 }
 
 pub struct Writer {
@@ -68,7 +67,7 @@ impl Writer {
                 予備名,
                 地番,
                 座標値種別,
-                筆界未定構成筆,
+                筆界未定構成筆: _, // Ignore this field for now
             } = feature.props;
 
             let row = OutputRow {
@@ -90,7 +89,6 @@ impl Writer {
                 予備名,
                 地番,
                 座標値種別,
-                筆界未定構成筆,
             };
             self.internal_writer.add_row(row)?;
         }
