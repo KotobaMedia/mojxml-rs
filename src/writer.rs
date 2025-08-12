@@ -156,7 +156,7 @@ mod tests {
                 測地系判別: Some("変換".to_string()),
             },
         };
-        let output_path = testdata_path().join("output.geoparquet");
+        let output_path = testdata_path().join("output.parquet");
         let mut writer = Writer::new(&output_path)?;
         writer.add_xml_features(parsed)?;
         writer.flush()?;
@@ -176,7 +176,7 @@ mod tests {
                 測地系判別: Some("変換".to_string()),
             },
         };
-        let output_path = testdata_path().join("output_empty.geoparquet");
+        let output_path = testdata_path().join("output_empty.parquet");
 
         // Make sure the file doesn't exist before the test
         if output_path.exists() {

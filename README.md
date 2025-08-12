@@ -46,10 +46,10 @@ Options:
 例:
 
 ```
-mojxml-rs ./moj-2025-46.geoparquet ../dl-tool/zips/46*.zip
+mojxml-rs ./moj-2025-46.parquet ../dl-tool/zips/46*.zip
 ```
 
-上記のコマンドは、 `dl-tool` でダウンロードした鹿児島県のすべてのzipファイルを、 `moj-2025-46.geoparquet` の GeoParquet にまとめて変換します。
+上記のコマンドは、 `dl-tool` でダウンロードした鹿児島県のすべてのzipファイルを、 `moj-2025-46.parquet` の GeoParquet にまとめて変換します。
 
 > [!TIP]
 > Linux のディストリビューションによって `/tmp` ディレクトリは tmpfs (メモリ上のファイルシステム) になっている。 `mojxml-rs` は親ZIPを解凍するときはテンポラリファイルを使うため、メモリをひっ迫する可能性があります。これを防ぐために、 `-t` オプションでディスク上のテンポラリディレクトリを指定してください。

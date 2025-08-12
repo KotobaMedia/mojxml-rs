@@ -1,6 +1,6 @@
 /target
 *.fgb
-*.geoparquet
+*.parquet
 flamegraph.svg
 *.log
 tmp
