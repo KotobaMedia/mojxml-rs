@@ -10,7 +10,7 @@ anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 crossbeam-channel = "0.5"
 geo-types = "0.7"
-geoparquet-batch-writer = "0.1.1"
+geoparquet-batch-writer = "0.1.2"
 indicatif = "0.18"
 log = "0.4"
 num_cpus = "1"

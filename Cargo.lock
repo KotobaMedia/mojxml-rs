@@ -748,9 +748,9 @@ dependencies = [
 
 [[package]]
 name = "geoparquet-batch-writer"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "809f6693b1f6c7f2afbff9733a68cbdb2b7e63cedd8a634e8de2c59415b2b860"
+checksum = "b9042c519fbb2884e41dc71a7aae23eb8f216fabbc91b8746e58037656f3ee8e"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -765,9 +765,9 @@ dependencies = [
 
 [[package]]
 name = "geoparquet-batch-writer-derive"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "173edba346282a2bcf087873c63a9d10df68e038b365670a73f4fa90d1867a31"
+checksum = "108b878028a0c2354a97d69473ad79048effbf9d3b95cda80d02fcdd659b1ef8"
 dependencies = [
  "proc-macro2",
  "quote",
