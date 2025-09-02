@@ -6,6 +6,7 @@ use geoparquet_batch_writer::GeoParquetRowStruct;
 use polylabel::polylabel;
 use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::vec;
 
@@ -19,14 +20,12 @@ pub struct Feature {
     pub props: FeatureProperties,
 }
 
-impl Feature {
-    pub fn point_on_polygon(&self) -> Result<Point<f64>> {
-        let pop = polylabel(&self.geometry, &0.001)?;
-        Ok(pop)
-    }
+fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
+    let pop = polylabel(polygon, &0.001)?;
+    Ok(pop)
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct FeatureProperties {
     pub 筆id: String,
     pub 精度区分: Option<String>,
@@ -41,9 +40,11 @@ pub struct FeatureProperties {
     pub 地番: String,
     pub 座標値種別: Option<String>,
     pub 筆界未定構成筆: Vec<筆界未定構成筆>,
+    pub 代表点緯度: f64,
+    pub 代表点経度: f64,
 }
 
-#[derive(Debug, Clone, GeoParquetRowStruct, Default)]
+#[derive(Debug, Clone, GeoParquetRowStruct, Default, Serialize)]
 pub struct 筆界未定構成筆 {
     pub 大字コード: String,
     pub 丁目コード: String,
@@ -56,6 +57,7 @@ pub struct 筆界未定構成筆 {
     pub 地番: String,
 }
 
+#[derive(Serialize)]
 pub struct CommonProperties {
     pub 地図名: String,
     pub 市区町村コード: String,
@@ -403,8 +405,10 @@ fn parse_features(
             筆界未定構成筆.push(constituent);
         }
 
+        let geometry = geometry.ok_or_else(|| Error::MissingElement("geometry".to_string()))?;
+        let pop = point_on_polygon(&geometry)?;
         features.push(Feature {
-            geometry: geometry.ok_or_else(|| Error::MissingElement("geometry".to_string()))?,
+            geometry,
             props: FeatureProperties {
                 筆id: fude_id.to_string(),
                 精度区分: prop_map.remove("精度区分"),
@@ -429,6 +433,8 @@ fn parse_features(
                     .ok_or_else(|| Error::MissingElement("地番".to_string()))?,
                 座標値種別: prop_map.remove("座標値種別"),
                 筆界未定構成筆,
+                代表点緯度: pop.y(),
+                代表点経度: pop.x(),
             },
         });
     }

@@ -1,6 +1,6 @@
 # mojxml-rs
 
-法務省登記所備付地図データ（地図XML）を高速でGISデータ形式（現在は GeoParquet を対応しています）に変換するコマンドラインツールです。
+法務省登記所備付地図データ（地図XML）を高速でGISデータ形式（現在は GeoParquet, FlatGeobuf, GeoJSON を対応しています）に変換するコマンドラインツールです。
 
 このツールは Rust で書いていますが、 [`mojxml-py`](https://github.com/ciscorn/mojxml-py) や[デジタル庁が提供している `mojxml2geojson`](https://github.com/digital-go-jp/mojxml2geojson) ツールを参考に作成しています。
 
@@ -10,6 +10,8 @@
 * 高速で処理できる。（著者の環境: Ryzen 9 9950X 16C/32T 96GB RAM の内、最大約 20GB 使用で全国 2025年度データを73分で一つの GeoParquet ファイルに変換できた）
 * zip内のzipアーカイブを自動で解凍する
 * 複数入力ファイルが統合されて一つの出力ファイルになります
+* 代表点座標を計算する
+* GeoParquet, FlatGeobuf, GeoJSON (newline-delimited) の出力を対応
 * Windows, Linux, macOS それぞれの OS で実行できるバイナリとして提供しています (work in progress)
 
 ## インストール方法
@@ -31,7 +33,7 @@
 Usage: mojxml-rs [OPTIONS] <DST_FILE> <SRC_FILES>...
 
 Arguments:
-  <DST_FILE>      Output GeoParquet file path
+  <DST_FILE>      Output file path
   <SRC_FILES>...  Input MOJ XML file paths (.xml or .zip)
 
 Options:

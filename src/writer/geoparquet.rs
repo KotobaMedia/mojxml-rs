@@ -33,31 +33,31 @@ struct OutputRow {
     筆界未定構成筆: Vec<筆界未定構成筆>,
 }
 
-pub struct Writer {
+pub struct GeoParquetWriter {
     internal_writer: GeoParquetBatchWriter<OutputRow>,
     output_path: PathBuf,
     has_features: bool,
 }
-impl Writer {
-    pub fn new(output_path: &Path) -> Result<Self> {
+
+impl crate::writer::shared::Writer for GeoParquetWriter {
+    fn new(output_path: &Path) -> Result<Self> {
         let internal_writer = GeoParquetBatchWriter::new(
             output_path,
             BatchConfig {
                 max_rows_per_batch: 100_000,
             },
         )?;
-        Ok(Writer {
+        Ok(GeoParquetWriter {
             internal_writer,
             output_path: output_path.to_path_buf(),
             has_features: false,
         })
     }
 
-    pub fn add_xml_features(&mut self, parsed: ParsedXML) -> Result<()> {
+    fn add_xml_features(&mut self, parsed: ParsedXML) -> Result<()> {
         // Write each feature, consuming the parsed data
         for feature in parsed.features {
             self.has_features = true;
-            let point_on_polygon = feature.point_on_polygon()?;
             let geometry: Polygon<f64> = feature.geometry.into();
 
             let FeatureProperties {
@@ -74,6 +74,8 @@ impl Writer {
                 地番,
                 座標値種別,
                 筆界未定構成筆,
+                代表点緯度,
+                代表点経度,
             } = feature.props;
 
             let row = OutputRow {
@@ -95,8 +97,8 @@ impl Writer {
                 予備名,
                 地番,
                 座標値種別,
-                代表点緯度: point_on_polygon.y(),
-                代表点経度: point_on_polygon.x(),
+                代表点緯度,
+                代表点経度,
                 筆界未定構成筆,
             };
             self.internal_writer.add_row(row)?;
@@ -105,12 +107,7 @@ impl Writer {
         Ok(())
     }
 
-    /// Flush the writer and finalize the FlatGeobuf file.
-    /// This method must be called to ensure all data is written to the file.
-    /// You cannot add any more features after calling this method.
-    /// If no features were added, the file will be removed.
-    /// The return value indicates whether the file was created (true) or not (false).
-    pub fn flush(self) -> Result<bool> {
+    fn flush(self: Box<Self>) -> Result<bool> {
         if self.has_features {
             self.internal_writer.finish()?;
             Ok(true)
@@ -132,7 +129,10 @@ impl Writer {
 mod tests {
     use geo_types::polygon;
 
-    use crate::parse::{CommonProperties, Feature, FeatureProperties};
+    use crate::{
+        parse::{CommonProperties, Feature, FeatureProperties},
+        writer::shared::Writer,
+    };
 
     use super::*;
     use std::path::PathBuf;
@@ -164,7 +164,7 @@ mod tests {
             },
         };
         let output_path = testdata_path().join("output.parquet");
-        let mut writer = Writer::new(&output_path)?;
+        let mut writer = Box::new(GeoParquetWriter::new(&output_path)?);
         writer.add_xml_features(parsed)?;
         writer.flush()?;
         Ok(())
@@ -190,7 +190,7 @@ mod tests {
             std::fs::remove_file(&output_path)?;
         }
 
-        let mut writer = Writer::new(&output_path)?;
+        let mut writer = Box::new(GeoParquetWriter::new(&output_path)?);
         writer.add_xml_features(parsed)?;
         writer.flush()?;
 

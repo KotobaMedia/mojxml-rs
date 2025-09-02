@@ -22,7 +22,7 @@ use std::{
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Output FlatGeobuf file path.
+    /// Output file path. The file format is determined by the file extension.
     #[arg(required = true)]
     dst_file: PathBuf,
 

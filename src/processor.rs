@@ -1,5 +1,6 @@
 use crate::parse::{ParseOptions, ParsedXML};
 use crate::reader::{FileData, iter_xml_contents};
+use crate::writer::make_writer_by_ext;
 use anyhow::Result;
 use crossbeam_channel::{bounded, unbounded};
 use indicatif::{MultiProgress, ProgressStyle};
@@ -138,7 +139,7 @@ pub fn process_files(
         let writer_pb = writer_pb.clone();
         let has_features = has_features.clone();
         handles.push(thread::spawn(move || {
-            let mut writer = crate::writer::Writer::new(&output_path).unwrap();
+            let mut writer = make_writer_by_ext(&output_path).unwrap();
             while let Ok(parsed_xml) = writer_rx.recv() {
                 info!("[GPQ] Adding features from file: {}", parsed_xml.file_name);
                 let write_result = writer.add_xml_features(parsed_xml);
