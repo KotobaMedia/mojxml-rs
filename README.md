@@ -27,6 +27,8 @@
 > [!NOTE]
 > macOS の場合は Gatekeeper の設定の関係で実行できない場合があります。次リリースには改善する予定ですが、今のところは `xattr -d com.apple.quarantine ./mojxml-rs` を1回実行してたら `./mojxml-rs` を通常通り実行できるようになります。
 
+Rust 環境のお持ちの方は、 `cargo install mojxml-rs` でインストールできます。
+
 ## 使い方
 
 ```
