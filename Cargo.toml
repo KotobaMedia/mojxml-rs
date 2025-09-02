@@ -6,6 +6,10 @@ authors = ["Keitaroh Kobayashi <keita@kotobamedia.com>"]
 version = "0.1.1"
 edition = "2024"
 license = "MIT"
+exclude = [
+  ".github/*",
+  "testdata/*",
+]
 
 [dependencies]
 anyhow = "1"
