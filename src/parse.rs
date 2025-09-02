@@ -1,39 +1,63 @@
 use crate::constants::{get_proj, get_xml_namespace};
 use crate::error::{Error, Result};
 use crate::reader::FileData;
-use geo_types::{LineString, MultiPolygon, Point, Polygon};
+use geo_types::{LineString, Point, Polygon};
+use geoparquet_batch_writer::GeoParquetRowStruct;
+use polylabel::polylabel;
 use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::vec;
 
 // --- Type Aliases ---
 type Curve = Point;
-type Surface = MultiPolygon;
+type Surface = Polygon;
 
 #[derive(Debug, Clone)]
 pub struct Feature {
-    pub geometry: MultiPolygon,
+    pub geometry: Polygon,
     pub props: FeatureProperties,
 }
 
-#[derive(Debug, Clone, Default)]
+fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
+    let pop = polylabel(polygon, &0.001)?;
+    Ok(pop)
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct FeatureProperties {
     pub 筆id: String,
     pub 精度区分: Option<String>,
-    pub 大字コード: Option<String>,
-    pub 丁目コード: Option<String>,
-    pub 小字コード: Option<String>,
-    pub 予備コード: Option<String>,
+    pub 大字コード: String,
+    pub 丁目コード: String,
+    pub 小字コード: String,
+    pub 予備コード: String,
     pub 大字名: Option<String>,
     pub 丁目名: Option<String>,
     pub 小字名: Option<String>,
     pub 予備名: Option<String>,
-    pub 地番: Option<String>,
+    pub 地番: String,
     pub 座標値種別: Option<String>,
-    pub 筆界未定構成筆: Option<String>,
+    pub 筆界未定構成筆: Vec<筆界未定構成筆>,
+    pub 代表点緯度: f64,
+    pub 代表点経度: f64,
 }
 
+#[derive(Debug, Clone, GeoParquetRowStruct, Default, Serialize)]
+pub struct 筆界未定構成筆 {
+    pub 大字コード: String,
+    pub 丁目コード: String,
+    pub 小字コード: String,
+    pub 予備コード: String,
+    pub 大字名: Option<String>,
+    pub 丁目名: Option<String>,
+    pub 小字名: Option<String>,
+    pub 予備名: Option<String>,
+    pub 地番: String,
+}
+
+#[derive(Serialize)]
 pub struct CommonProperties {
     pub 地図名: String,
     pub 市区町村コード: String,
@@ -283,7 +307,7 @@ fn parse_surfaces(
 
         surfaces.insert(
             surface_id.to_string(),
-            MultiPolygon::new(vec![Polygon::new(exterior_ring, interior_rings)]),
+            Polygon::new(exterior_ring, interior_rings),
         );
     }
 
@@ -306,7 +330,7 @@ fn parse_features(
                 attribute: "id".to_string(),
             })?;
 
-        let mut geometry: Option<MultiPolygon> = None;
+        let mut geometry: Option<Polygon> = None;
         let mut prop_map: HashMap<String, String> = HashMap::new();
         for entry in fude.children().filter(|child| child.is_element()) {
             let name = entry.tag_name().name();
@@ -333,22 +357,84 @@ fn parse_features(
             }
         }
 
+        // if 筆界未定構成筆 exists, let's extract each one out, create a 筆界未定構成筆 struct, then put it in the output feature
+        let mut 筆界未定構成筆 = vec![];
+
+        // Parse 筆界未定構成筆 elements
+        for constituent_fude in fude.children().filter(|child| {
+            child.tag_name().name() == "筆界未定構成筆"
+                && child.tag_name().namespace() == get_xml_namespace(None)
+        }) {
+            let mut constituent_props: HashMap<String, String> = HashMap::new();
+
+            // Extract all properties from the constituent fude
+            for constituent_entry in constituent_fude
+                .children()
+                .filter(|child| child.is_element())
+            {
+                let name = constituent_entry.tag_name().name();
+                let value = constituent_entry.text().unwrap_or("").to_string();
+                constituent_props.insert(name.to_string(), value);
+            }
+
+            // Create the 筆界未定構成筆 struct
+            let constituent = crate::parse::筆界未定構成筆 {
+                大字コード: constituent_props
+                    .get("大字コード")
+                    .cloned()
+                    .unwrap_or_default(),
+                丁目コード: constituent_props
+                    .get("丁目コード")
+                    .cloned()
+                    .unwrap_or_default(),
+                小字コード: constituent_props
+                    .get("小字コード")
+                    .cloned()
+                    .unwrap_or_default(),
+                予備コード: constituent_props
+                    .get("予備コード")
+                    .cloned()
+                    .unwrap_or_default(),
+                大字名: constituent_props.get("大字名").cloned(),
+                丁目名: constituent_props.get("丁目名").cloned(),
+                小字名: constituent_props.get("小字名").cloned(),
+                予備名: constituent_props.get("予備名").cloned(),
+                地番: constituent_props.get("地番").cloned().unwrap_or_default(),
+            };
+
+            筆界未定構成筆.push(constituent);
+        }
+
+        let geometry = geometry.ok_or_else(|| Error::MissingElement("geometry".to_string()))?;
+        let pop = point_on_polygon(&geometry)?;
         features.push(Feature {
-            geometry: geometry.ok_or_else(|| Error::MissingElement("geometry".to_string()))?,
+            geometry,
             props: FeatureProperties {
                 筆id: fude_id.to_string(),
                 精度区分: prop_map.remove("精度区分"),
-                大字コード: prop_map.remove("大字コード"),
-                丁目コード: prop_map.remove("丁目コード"),
-                小字コード: prop_map.remove("小字コード"),
-                予備コード: prop_map.remove("予備コード"),
+                大字コード: prop_map
+                    .remove("大字コード")
+                    .ok_or_else(|| Error::MissingElement("大字コード".to_string()))?,
+                丁目コード: prop_map
+                    .remove("丁目コード")
+                    .ok_or_else(|| Error::MissingElement("丁目コード".to_string()))?,
+                小字コード: prop_map
+                    .remove("小字コード")
+                    .ok_or_else(|| Error::MissingElement("小字コード".to_string()))?,
+                予備コード: prop_map
+                    .remove("予備コード")
+                    .ok_or_else(|| Error::MissingElement("予備コード".to_string()))?,
                 大字名: prop_map.remove("大字名"),
                 丁目名: prop_map.remove("丁目名"),
                 小字名: prop_map.remove("小字名"),
                 予備名: prop_map.remove("予備名"),
-                地番: prop_map.remove("地番"),
+                地番: prop_map
+                    .remove("地番")
+                    .ok_or_else(|| Error::MissingElement("地番".to_string()))?,
                 座標値種別: prop_map.remove("座標値種別"),
-                筆界未定構成筆: prop_map.remove("筆界未定構成筆"),
+                筆界未定構成筆,
+                代表点緯度: pop.y(),
+                代表点経度: pop.x(),
             },
         });
     }
@@ -460,6 +546,67 @@ mod tests {
         assert_eq!(features.len(), 2994);
         let feature = &features[0];
         assert_eq!(feature.props.筆id, "H000000001");
-        assert_eq!(feature.props.地番, Some("1".to_string()));
+        assert_eq!(feature.props.地番, "1");
+    }
+
+    #[test]
+    fn test_parse_chikugai_miten_kosei_features() {
+        // Test parsing of 筆界未定構成筆 elements
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let xml_path = Path::new(&manifest_dir).join("testdata/46505-3411-56.xml");
+        let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
+        let options = ParseOptions {
+            include_arbitrary_crs: true,
+            include_chikugai: true,
+        };
+        let ParsedXML {
+            file_name: _,
+            features,
+            common_props: _,
+        } = parse_xml_content(
+            &FileData {
+                file_name: "46505-3411-56.xml".to_string(),
+                contents: xml_temp,
+            },
+            &options,
+        )
+        .expect("Failed to parse XML");
+
+        // Find a feature with 筆界未定構成筆 data
+        let features_with_chikugai: Vec<_> = features
+            .iter()
+            .filter(|f| !f.props.筆界未定構成筆.is_empty())
+            .collect();
+
+        assert!(
+            !features_with_chikugai.is_empty(),
+            "Should find features with 筆界未定構成筆"
+        );
+
+        // Check the first feature with 筆界未定構成筆
+        let feature_with_chikugai = features_with_chikugai[0];
+        assert!(!feature_with_chikugai.props.筆界未定構成筆.is_empty());
+
+        // Verify the structure of the first 筆界未定構成筆 element
+        let first_constituent = &feature_with_chikugai.props.筆界未定構成筆[0];
+
+        // These should not be empty/default based on the XML we saw
+        assert!(!first_constituent.大字コード.is_empty());
+        assert!(!first_constituent.地番.is_empty());
+        assert!(first_constituent.大字名.is_some());
+
+        println!(
+            "Found feature with {} 筆界未定構成筆 elements",
+            feature_with_chikugai.props.筆界未定構成筆.len()
+        );
+        println!(
+            "First constituent: {} {} {}",
+            first_constituent
+                .大字名
+                .as_ref()
+                .unwrap_or(&"N/A".to_string()),
+            first_constituent.地番,
+            first_constituent.大字コード
+        );
     }
 }

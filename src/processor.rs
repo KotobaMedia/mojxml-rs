@@ -1,6 +1,6 @@
 use crate::parse::{ParseOptions, ParsedXML};
 use crate::reader::{FileData, iter_xml_contents};
-use crate::writer::WriterOptions;
+use crate::writer::make_writer_by_ext;
 use anyhow::Result;
 use crossbeam_channel::{bounded, unbounded};
 use indicatif::{MultiProgress, ProgressStyle};
@@ -16,7 +16,6 @@ pub fn process_files(
     output_path: &Path,
     src_files: Vec<PathBuf>,
     parse_options: ParseOptions,
-    write_options: WriterOptions,
 ) -> Result<usize> {
     let concurrency = num_cpus::get();
     let m = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::stdout_with_hz(2));
@@ -48,7 +47,7 @@ pub fn process_files(
     let writer_pb = m.add(
         indicatif::ProgressBar::new(0)
             .with_style(sty.clone())
-            .with_message("FGB write"),
+            .with_message("  write  "),
     );
 
     let start = Instant::now();
@@ -140,10 +139,10 @@ pub fn process_files(
         let writer_pb = writer_pb.clone();
         let has_features = has_features.clone();
         handles.push(thread::spawn(move || {
-            let mut fgb = crate::writer::FGBWriter::new(&output_path, &write_options).unwrap();
+            let mut writer = make_writer_by_ext(&output_path).unwrap();
             while let Ok(parsed_xml) = writer_rx.recv() {
-                info!("[FGB] Adding features from file: {}", parsed_xml.file_name);
-                let write_result = fgb.add_xml_features(parsed_xml);
+                info!("[GPQ] Adding features from file: {}", parsed_xml.file_name);
+                let write_result = writer.add_xml_features(parsed_xml);
                 match write_result {
                     Ok(_) => {
                         writer_pb.inc(1);
@@ -153,13 +152,13 @@ pub fn process_files(
                     }
                 }
             }
-            info!("[FGB] Starting output file: {}", output_path.display());
-            let created_file = fgb.flush().unwrap();
+            info!("[GPQ] Starting output file: {}", output_path.display());
+            let created_file = writer.flush().unwrap();
             if !created_file {
-                info!("[FGB] No features written");
+                info!("[GPQ] No features written");
                 has_features.fetch_sub(1, Ordering::Relaxed);
             } else {
-                info!("[FGB] Finished writing file: {}", output_path.display());
+                info!("[GPQ] Finished writing file: {}", output_path.display());
                 has_features.fetch_add(1, Ordering::Relaxed);
             }
         }));
