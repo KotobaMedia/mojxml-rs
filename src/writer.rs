@@ -1,4 +1,4 @@
-use crate::parse::{FeatureProperties, ParsedXML};
+use crate::parse::{FeatureProperties, ParsedXML, 筆界未定構成筆};
 use anyhow::Result;
 use geo_types::Polygon;
 use geoparquet_batch_writer::{BatchConfig, GeoParquetBatchWriter, GeoParquetRowData};
@@ -29,6 +29,8 @@ struct OutputRow {
 
     代表点緯度: f64,
     代表点経度: f64,
+
+    筆界未定構成筆: Vec<筆界未定構成筆>,
 }
 
 pub struct Writer {
@@ -71,7 +73,7 @@ impl Writer {
                 予備名,
                 地番,
                 座標値種別,
-                筆界未定構成筆: _, // Ignore this field for now
+                筆界未定構成筆,
             } = feature.props;
 
             let row = OutputRow {
@@ -95,6 +97,7 @@ impl Writer {
                 座標値種別,
                 代表点緯度: point_on_polygon.y(),
                 代表点経度: point_on_polygon.x(),
+                筆界未定構成筆,
             };
             self.internal_writer.add_row(row)?;
         }

@@ -2,6 +2,7 @@ use crate::constants::{get_proj, get_xml_namespace};
 use crate::error::{Error, Result};
 use crate::reader::FileData;
 use geo_types::{LineString, Point, Polygon};
+use geoparquet_batch_writer::GeoParquetRowStruct;
 use polylabel::polylabel;
 use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
@@ -42,7 +43,7 @@ pub struct FeatureProperties {
     pub 筆界未定構成筆: Vec<筆界未定構成筆>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, GeoParquetRowStruct, Default)]
 pub struct 筆界未定構成筆 {
     pub 大字コード: String,
     pub 丁目コード: String,
