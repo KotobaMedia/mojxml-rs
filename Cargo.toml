@@ -1,5 +1,7 @@
 [package]
 name = "mojxml-rs"
+description = "A CLI tool to convert MOJ-XML files to GeoParquet, FlatGeobuf, or GeoJSON"
+repository = "https://github.com/KotobaMedia/mojxml-rs"
 authors = ["Keitaroh Kobayashi <keita@kotobamedia.com>"]
 version = "0.1.1"
 edition = "2024"
