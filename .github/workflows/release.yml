@@ -6,7 +6,17 @@ permissions:
 on:
   push:
     tags:
-    - v*
+      - v*
+
+  workflow_dispatch:
+    inputs:
+      skip_release:
+        description: 'Skip creating GitHub Release'
+        required: true
+        default: 'true'
+
+env:
+  BINARY: mojxml-rs
 
 jobs:
   build:
@@ -30,32 +40,75 @@ jobs:
         with:
           toolchain: stable
           target: ${{ matrix.job.arch }}
+
       - name: Build
         run: cargo build --release --target ${{ matrix.job.arch }}
 
-      - name: Create archive
-        if: matrix.job.os == 'ubuntu-latest' || matrix.job.os == 'macos-latest'
+      - name: Import macOS codesign certs
+        uses: apple-actions/import-codesign-certs@v5
+        if: matrix.job.os == 'macos-latest'
+        with:
+          p12-file-base64: ${{ secrets.MACOS_CERT_P12 }}
+          p12-password: ${{ secrets.MACOS_CERT_PWD }}
+
+      - name: Codesign (macOS)
+        if: matrix.job.os == 'macos-latest'
+        run: |
+          BIN=target/${{ matrix.job.arch }}/release/${{ env.BINARY }}
+          CERT_NAME="$(security find-identity -v -p codesigning | awk -F\" '/Developer ID Application/ {print $2; exit}')"
+          codesign --force --options runtime --timestamp --sign "$CERT_NAME" "$BIN"
+          codesign --verify --deep --strict --verbose=2 "$BIN"
+          spctl -a -vv "$BIN" || true
+
+      - name: Create archive (Linux)
+        if: matrix.job.os == 'ubuntu-latest'
         run: |
           mkdir -p target/artifacts
-          cp target/${{ matrix.job.arch }}/release/mojxml-rs target/artifacts/
+          cp target/${{ matrix.job.arch }}/release/${{ env.BINARY }} target/artifacts/
           cd target/artifacts
-          zip mojxml-rs-${{ matrix.job.arch }}.zip mojxml-rs
+          zip ${{ env.BINARY }}-${{ matrix.job.arch }}.zip ${{ env.BINARY }}
+
+      - name: Create archive (macOS)
+        if: matrix.job.os == 'macos-latest'
+        run: |
+          mkdir -p target/artifacts
+          cp target/${{ matrix.job.arch }}/release/${{ env.BINARY }} target/artifacts/
+          cd target/artifacts
+          zip -9r ${{ env.BINARY }}-${{ matrix.job.arch }}.zip ${{ env.BINARY }}
+
+      - name: Notarize (macOS)
+        if: matrix.job.os == 'macos-latest'
+        run: |
+          KEY=$RUNNER_TEMP/app_store_connect_key.json
+          PRIVATE_KEY_PEM=$RUNNER_TEMP/private_key.pem
+          echo '${{ secrets.APP_STORE_CONNECT_KEY }}' > $KEY
+
+          echo '-----BEGIN PRIVATE KEY-----' > $PRIVATE_KEY_PEM
+          jq -r '.private_key' $KEY >> $PRIVATE_KEY_PEM
+          echo '-----END PRIVATE KEY-----' >> $PRIVATE_KEY_PEM
+
+          xcrun notarytool submit "target/artifacts/${{ env.BINARY }}-${{ matrix.job.arch }}.zip" \
+            --key-id "$(jq -r '.key_id' $KEY)" \
+            --issuer "$(jq -r '.issuer_id' $KEY)" \
+            --key $PRIVATE_KEY_PEM \
+            --wait
 
       - name: Create archive (Windows)
         if: matrix.job.os == 'windows-latest'
         run: |
           New-Item -ItemType Directory -Force -Path target/artifacts
-          cp target/${{ matrix.job.arch }}/release/mojxml-rs.exe target/artifacts/
+          cp target/${{ matrix.job.arch }}/release/${{ env.BINARY }}.exe target/artifacts/
           cd target/artifacts
-          7z a mojxml-rs-${{ matrix.job.arch }}.zip mojxml-rs.exe
+          7z a ${{ env.BINARY }}-${{ matrix.job.arch }}.zip ${{ env.BINARY }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.job.arch }}-release
-          path: target/artifacts/mojxml-rs-${{ matrix.job.arch }}.zip
+          path: target/artifacts/${{ env.BINARY }}-${{ matrix.job.arch }}.zip
 
   release:
+    if: ${{ github.event.inputs.skip_release != 'true' }}
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -83,6 +136,6 @@ jobs:
           # Use the tag name without the refs/ prefix
           tag_name: ${{ github.ref_name }}
           files: |
-            artifacts/x86_64/mojxml-rs-x86_64-unknown-linux-gnu.zip
-            artifacts/x86_64/mojxml-rs-x86_64-pc-windows-msvc.zip
-            artifacts/aarch64/mojxml-rs-aarch64-apple-darwin.zip
+            artifacts/x86_64/${{ env.BINARY }}-x86_64-unknown-linux-gnu.zip
+            artifacts/x86_64/${{ env.BINARY }}-x86_64-pc-windows-msvc.zip
+            artifacts/aarch64/${{ env.BINARY }}-aarch64-apple-darwin.zip
