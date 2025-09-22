@@ -8,13 +8,6 @@ on:
     tags:
       - v*
 
-  workflow_dispatch:
-    inputs:
-      skip_release:
-        description: 'Skip creating GitHub Release'
-        required: true
-        default: 'true'
-
 env:
   BINARY: mojxml-rs
 
@@ -109,7 +102,6 @@ jobs:
           path: target/artifacts/${{ env.BINARY }}-${{ matrix.job.arch }}.zip
 
   release:
-    if: ${{ github.event.inputs.skip_release != 'true' }}
     needs: build
     runs-on: ubuntu-latest
     steps:

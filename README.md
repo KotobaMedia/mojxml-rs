@@ -12,20 +12,17 @@
 * 複数入力ファイルが統合されて一つの出力ファイルになります
 * 代表点座標を計算する
 * GeoParquet, FlatGeobuf, GeoJSON (newline-delimited) の出力を対応
-* Windows, Linux, macOS それぞれの OS で実行できるバイナリとして提供しています (work in progress)
+* Windows, Linux, macOS それぞれの OS で実行できるバイナリとして提供しています
 
 ## インストール方法
 
 このツールは Rust で書かれていますが、コンパイル済みバイナリも下記のアーキテクチャで用意しています。
 
 * macOS (Apple Silicon)
-* Windows
+* Windows (x86_64)
 * Linux (x86_64)
 
-[最新の Releases](https://github.com/KotobaMedia/mojxml-rs/releases) から利用環境の zip アーカイブをダウンロードしていただき、解凍したらコマンドラインで実行できます。お困りの方は [GitHub Issues](https://github.com/KotobaMedia/mojxml-rs/issues) で詳細を教えて下さい。
-
-> [!NOTE]
-> macOS の場合は Gatekeeper の設定の関係で実行できない場合があります。次リリースには改善する予定ですが、今のところは `xattr -d com.apple.quarantine ./mojxml-rs` を1回実行してたら `./mojxml-rs` を通常通り実行できるようになります。
+[最新の Release](https://github.com/KotobaMedia/mojxml-rs/releases/latest) から利用環境の zip アーカイブをダウンロードしていただき、解凍したらコマンドラインで実行できます。お困りの方は [GitHub Issues](https://github.com/KotobaMedia/mojxml-rs/issues) で詳細を教えて下さい。
 
 Rust 環境のお持ちの方は、 `cargo install mojxml-rs` でインストールできます。
 
