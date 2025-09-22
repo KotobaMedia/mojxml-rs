@@ -27,7 +27,8 @@ jobs:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
+          # Fix to 1.89.0 until https://github.com/rust-lang/rust/issues/131960 is solved
+          toolchain: 1.89.0
           target: ${{ matrix.job.arch }}
 
       - name: Build
