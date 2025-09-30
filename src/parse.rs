@@ -8,11 +8,103 @@ use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::vec;
 
 // --- Type Aliases ---
 type Curve = Point;
 type Surface = Polygon;
+
+fn has_tag(node: &Node, namespace: Option<&str>, name: &str) -> bool {
+    node.tag_name().name() == name && node.tag_name().namespace() == namespace
+}
+
+fn required_attribute(node: &Node, attr: &str) -> Result<String> {
+    node.attribute(attr)
+        .map(|value| value.to_string())
+        .ok_or_else(|| Error::MissingAttribute {
+            element: node.tag_name().name().to_string(),
+            attribute: attr.to_string(),
+        })
+}
+
+fn node_text(node: &Node, label: &str) -> Result<String> {
+    node.text()
+        .map(|text| text.to_string())
+        .ok_or_else(|| Error::MissingElement(label.to_string()))
+}
+
+fn child_text(node: &Node, label: &str) -> Result<String> {
+    let child = get_child_element(node, label)?;
+    node_text(&child, label)
+}
+
+fn parse_text_as_f64(node: &Node, label: &str) -> Result<f64> {
+    let text = node
+        .text()
+        .ok_or_else(|| Error::MissingElement(label.to_string()))?;
+    Ok(text.parse::<f64>()?)
+}
+
+fn parse_xy(node: &Node) -> Result<(f64, f64)> {
+    let mut x = None;
+    let mut y = None;
+
+    for child in node.children().filter(|child| child.is_element()) {
+        match child.tag_name().name() {
+            "X" => x = Some(parse_text_as_f64(&child, "X")?),
+            "Y" => y = Some(parse_text_as_f64(&child, "Y")?),
+            _ => {}
+        }
+    }
+
+    let x = x.ok_or_else(|| Error::MissingElement("X".to_string()))?;
+    let y = y.ok_or_else(|| Error::MissingElement("Y".to_string()))?;
+    Ok((x, y))
+}
+
+fn collect_ring_points(
+    boundary: &Node,
+    curves: &HashMap<String, Curve>,
+    zmn_ns: Option<&str>,
+) -> Result<Vec<Point>> {
+    let mut ring_points = Vec::new();
+
+    for ring in boundary
+        .descendants()
+        .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Ring"))
+    {
+        for curve_ref in ring.children().filter(|child| child.is_element()) {
+            let idref = required_attribute(&curve_ref, "idref")?;
+            let curve = curves
+                .get(idref.as_str())
+                .ok_or_else(|| Error::PointNotFound(idref.clone()))?;
+            ring_points.push(*curve);
+        }
+    }
+
+    Ok(ring_points)
+}
+
+fn parse_constituent_fude(node: &Node) -> 筆界未定構成筆 {
+    let mut constituent = 筆界未定構成筆::default();
+
+    for entry in node.children().filter(|child| child.is_element()) {
+        let value = entry.text().unwrap_or("").to_string();
+        match entry.tag_name().name() {
+            "大字コード" => constituent.大字コード = value,
+            "丁目コード" => constituent.丁目コード = value,
+            "小字コード" => constituent.小字コード = value,
+            "予備コード" => constituent.予備コード = value,
+            "大字名" => constituent.大字名 = Some(value),
+            "丁目名" => constituent.丁目名 = Some(value),
+            "小字名" => constituent.小字名 = Some(value),
+            "予備名" => constituent.予備名 = Some(value),
+            "地番" => constituent.地番 = value,
+            _ => {}
+        }
+    }
+
+    constituent
+}
 
 #[derive(Debug, Clone)]
 pub struct Feature {
@@ -82,38 +174,21 @@ fn get_child_element<'a>(node: &'a Node<'a, 'a>, name: &str) -> Result<Node<'a, 
 // -- Accessory parsing functions --
 fn parse_points(spatial_element: &Node) -> Result<HashMap<String, Point>> {
     let mut points = HashMap::new();
-    let gm_point_iter = spatial_element.children().filter(|child| {
-        child.tag_name().name() == "GM_Point"
-            && child.tag_name().namespace() == get_xml_namespace(Some("zmn"))
-    });
-    for point in gm_point_iter {
-        let pos = point
+    let zmn_ns = get_xml_namespace(Some("zmn"));
+
+    for point in spatial_element
+        .children()
+        .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Point"))
+    {
+        let direct_position = point
             .descendants()
-            .find(|child| {
-                child.tag_name().name() == "DirectPosition"
-                    && child.tag_name().namespace() == get_xml_namespace(Some("zmn"))
-            })
-            .ok_or_else(|| Error::MissingElement("pos".to_string()))?;
-        let mut x: Option<f64> = None;
-        let mut y: Option<f64> = None;
-        for xy in pos.children() {
-            if xy.tag_name().name() == "X" {
-                x = Some(xy.text().unwrap_or("0").parse::<f64>()?);
-            } else if xy.tag_name().name() == "Y" {
-                y = Some(xy.text().unwrap_or("0").parse::<f64>()?);
-            }
-        }
-        let x = x.ok_or_else(|| Error::MissingElement("X".to_string()))?;
-        let y = y.ok_or_else(|| Error::MissingElement("Y".to_string()))?;
-        let pos = Point::new(x, y);
-        let point_id = point
-            .attribute("id")
-            .ok_or_else(|| Error::MissingAttribute {
-                element: "GM_Point".to_string(),
-                attribute: "id".to_string(),
-            })?;
-        points.insert(point_id.to_string(), pos);
+            .find(|child| child.is_element() && has_tag(child, zmn_ns, "DirectPosition"))
+            .ok_or_else(|| Error::MissingElement("DirectPosition".to_string()))?;
+        let (x, y) = parse_xy(&direct_position)?;
+        let point_id = required_attribute(&point, "id")?;
+        points.insert(point_id, Point::new(x, y));
     }
+
     Ok(points)
 }
 
@@ -124,72 +199,42 @@ fn parse_curves(
     let mut curves = HashMap::new();
     let zmn_ns = get_xml_namespace(Some("zmn"));
 
-    for curve in spatial_element.children().filter(|child| {
-        child.tag_name().name() == "GM_Curve" && child.tag_name().namespace() == zmn_ns
-    }) {
-        let curve_id = curve
-            .attribute("id")
-            .ok_or_else(|| Error::MissingAttribute {
-                element: "GM_Curve".to_string(),
-                attribute: "id".to_string(),
-            })?;
+    for curve in spatial_element
+        .children()
+        .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Curve"))
+    {
+        let curve_id = required_attribute(&curve, "id")?;
 
         let segment = curve
             .children()
-            .find(|child| {
-                child.tag_name().name() == "GM_Curve.segment"
-                    && child.tag_name().namespace() == zmn_ns
-            })
+            .find(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Curve.segment"))
             .ok_or_else(|| Error::MissingElement("GM_Curve.segment".to_string()))?;
 
         let column = segment
             .descendants()
-            .find(|child| {
-                child.tag_name().name() == "GM_PointArray.column"
-                    && child.tag_name().namespace() == zmn_ns
-            })
+            .find(|child| child.is_element() && has_tag(child, zmn_ns, "GM_PointArray.column"))
             .ok_or_else(|| Error::MissingElement("GM_PointArray.column".to_string()))?;
-        let pos = column
+
+        let position = column
             .first_element_child()
             .ok_or_else(|| Error::MissingElement("GM_Position.*".to_string()))?;
 
-        let (x, y) = if pos.tag_name().name() == "GM_Position.indirect" {
-            let r#ref = pos
-                .first_element_child()
-                .ok_or_else(|| Error::MissingElement("GM_Position.indirect".to_string()))?;
-            let idref = r#ref
-                .attribute("idref")
-                .ok_or_else(|| Error::MissingAttribute {
-                    element: "GM_Position.indirect".to_string(),
-                    attribute: "idref".to_string(),
-                })?;
-            let point = points
-                .get(idref)
-                .ok_or_else(|| Error::PointNotFound(idref.to_string()))?;
-
-            (point.x(), point.y())
-        } else if pos.tag_name().name() == "GM_Position.direct" {
-            let x = pos
-                .children()
-                .find(|child| child.tag_name().name() == "X")
-                .ok_or_else(|| Error::MissingElement("X".to_string()))?
-                .text()
-                .ok_or_else(|| Error::MissingElement("X".to_string()))?
-                .parse::<f64>()?;
-            let y = pos
-                .children()
-                .find(|child| child.tag_name().name() == "Y")
-                .ok_or_else(|| Error::MissingElement("Y".to_string()))?
-                .text()
-                .ok_or_else(|| Error::MissingElement("Y".to_string()))?
-                .parse::<f64>()?;
-            (x, y)
-        } else {
-            return Err(Error::UnexpectedElement(pos.tag_name().name().to_string()));
+        let (x, y) = match position.tag_name().name() {
+            "GM_Position.indirect" => {
+                let reference = position
+                    .first_element_child()
+                    .ok_or_else(|| Error::MissingElement("GM_Position.indirect".to_string()))?;
+                let idref = required_attribute(&reference, "idref")?;
+                let point = points
+                    .get(idref.as_str())
+                    .ok_or_else(|| Error::PointNotFound(idref.clone()))?;
+                (point.x(), point.y())
+            }
+            "GM_Position.direct" => parse_xy(&position)?,
+            other => return Err(Error::UnexpectedElement(other.to_string())),
         };
 
-        let curve_point = Curve::new(y, x);
-        curves.insert(curve_id.to_string(), curve_point);
+        curves.insert(curve_id, Curve::new(y, x));
     }
 
     Ok(curves)
@@ -200,8 +245,9 @@ fn transform_curves_crs(
     source_crs: &Proj,
     target_crs: &Proj,
 ) -> Result<()> {
-    // let transformer = Proj::new_known_crs(source_crs, target_crs, None)
-    //     .map_err(|e| Error::Projection(e.to_string()))?;
+    if curves.is_empty() {
+        return Ok(());
+    }
 
     for curve in curves.values_mut() {
         let mut point = (curve.x(), curve.y());
@@ -219,96 +265,41 @@ fn parse_surfaces(
     let mut surfaces = HashMap::new();
     let zmn_ns = get_xml_namespace(Some("zmn"));
 
-    for surface in spatial_element.children().filter(|child| {
-        child.tag_name().name() == "GM_Surface" && child.tag_name().namespace() == zmn_ns
-    }) {
-        let polygons = surface
+    for surface in spatial_element
+        .children()
+        .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Surface"))
+    {
+        let surface_id = required_attribute(&surface, "id")?;
+
+        let polygon = surface
             .children()
-            .filter(|child| {
-                child.tag_name().name() == "GM_Surface.patch"
-                    && child.tag_name().namespace() == zmn_ns
-            })
+            .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Surface.patch"))
             .flat_map(|patch| {
-                patch.children().filter(|child| {
-                    child.tag_name().name() == "GM_Polygon"
-                        && child.tag_name().namespace() == zmn_ns
-                })
+                patch
+                    .children()
+                    .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Polygon"))
             })
-            .collect::<Vec<_>>();
-        let polygon = polygons
-            .first()
+            .next()
             .ok_or_else(|| Error::MissingElement("GM_Surface.patch".to_string()))?;
-        let surface_id = surface
-            .attribute("id")
-            .ok_or_else(|| Error::MissingAttribute {
-                element: "GM_Surface".to_string(),
-                attribute: "id".to_string(),
-            })?;
 
         let exterior = polygon
             .descendants()
             .find(|child| {
-                child.tag_name().name() == "GM_SurfaceBoundary.exterior"
-                    && child.tag_name().namespace() == zmn_ns
+                child.is_element() && has_tag(child, zmn_ns, "GM_SurfaceBoundary.exterior")
             })
             .ok_or_else(|| Error::MissingElement("GM_SurfaceBoundary.exterior".to_string()))?;
 
-        let mut ring: Vec<Point> = Vec::new();
-        for cc in exterior
+        let exterior_ring = LineString::from(collect_ring_points(&exterior, curves, zmn_ns)?);
+
+        let interior_rings = polygon
             .descendants()
             .filter(|child| {
-                child.tag_name().name() == "GM_Ring" && child.tag_name().namespace() == zmn_ns
+                child.is_element() && has_tag(child, zmn_ns, "GM_SurfaceBoundary.interior")
             })
-            .flat_map(|ring| ring.children().filter(|child| child.is_element()))
-        {
-            let curve_id = cc
-                .attribute("idref")
-                .ok_or_else(|| Error::MissingAttribute {
-                    element: cc.tag_name().name().to_string(),
-                    attribute: "idref".to_string(),
-                })?;
-            let curve = curves
-                .get(curve_id)
-                .ok_or_else(|| Error::PointNotFound(curve_id.to_string()))?;
-            ring.push(*curve);
-        }
-        let exterior_ring = LineString::from(ring);
+            .map(|interior| collect_ring_points(&interior, curves, zmn_ns).map(LineString::from))
+            .collect::<Result<Vec<_>>>()?;
 
-        let mut interior_rings: Vec<LineString> = Vec::new();
-        for interior in polygon
-            .descendants()
-            .filter(|child| {
-                child.tag_name().name() == "GM_SurfaceBoundary.interior"
-                    && child.tag_name().namespace() == zmn_ns
-            })
-            .flat_map(|ring| ring.children().filter(|child| child.is_element()))
-        {
-            let mut ring: Vec<Point> = Vec::new();
-            for cc in interior
-                .descendants()
-                .filter(|child| {
-                    child.tag_name().name() == "GM_Ring" && child.tag_name().namespace() == zmn_ns
-                })
-                .flat_map(|ring| ring.children().filter(|child| child.is_element()))
-            {
-                let curve_id = cc
-                    .attribute("idref")
-                    .ok_or_else(|| Error::MissingAttribute {
-                        element: cc.tag_name().name().to_string(),
-                        attribute: "idref".to_string(),
-                    })?;
-                let curve = curves
-                    .get(curve_id)
-                    .ok_or_else(|| Error::PointNotFound(curve_id.to_string()))?;
-                ring.push(*curve);
-            }
-            interior_rings.push(LineString::from(ring));
-        }
-
-        surfaces.insert(
-            surface_id.to_string(),
-            Polygon::new(exterior_ring, interior_rings),
-        );
+        surfaces.insert(surface_id, Polygon::new(exterior_ring, interior_rings));
     }
 
     Ok(surfaces)
@@ -320,148 +311,110 @@ fn parse_features(
     options: &ParseOptions,
 ) -> Result<Vec<Feature>> {
     let mut features: Vec<Feature> = Vec::new();
-    for fude in subject_elem.children().filter(|child| {
-        child.tag_name().name() == "筆" && child.tag_name().namespace() == get_xml_namespace(None)
-    }) {
-        let fude_id = fude
-            .attribute("id")
-            .ok_or_else(|| Error::MissingAttribute {
-                element: "筆".to_string(),
-                attribute: "id".to_string(),
-            })?;
+    let default_ns = get_xml_namespace(None);
 
+    for fude in subject_elem
+        .children()
+        .filter(|child| child.is_element() && has_tag(child, default_ns, "筆"))
+    {
+        let fude_id = required_attribute(&fude, "id")?;
         let mut geometry: Option<Polygon> = None;
-        let mut prop_map: HashMap<String, String> = HashMap::new();
+
+        let mut 精度区分 = None;
+        let mut 大字コード = None;
+        let mut 丁目コード = None;
+        let mut 小字コード = None;
+        let mut 予備コード = None;
+        let mut 大字名 = None;
+        let mut 丁目名 = None;
+        let mut 小字名 = None;
+        let mut 予備名 = None;
+        let mut 地番 = None;
+        let mut 座標値種別 = None;
+        let mut 筆界未定構成筆 = Vec::new();
+
         for entry in fude.children().filter(|child| child.is_element()) {
-            let name = entry.tag_name().name();
-            if name == "形状" {
-                let idref = entry
-                    .attribute("idref")
-                    .ok_or_else(|| Error::MissingAttribute {
-                        element: "形状".to_string(),
-                        attribute: "idref".to_string(),
-                    })?;
-                geometry = surfaces.get(idref).cloned();
-            } else {
-                let value = entry.text().unwrap_or("").to_string();
-                prop_map.insert(name.to_string(), value);
+            let value = entry.text().unwrap_or("").to_string();
+            match entry.tag_name().name() {
+                "形状" => {
+                    let idref = required_attribute(&entry, "idref")?;
+                    geometry = surfaces.get(idref.as_str()).cloned();
+                }
+                "精度区分" => 精度区分 = Some(value),
+                "大字コード" => 大字コード = Some(value),
+                "丁目コード" => 丁目コード = Some(value),
+                "小字コード" => 小字コード = Some(value),
+                "予備コード" => 予備コード = Some(value),
+                "大字名" => 大字名 = Some(value),
+                "丁目名" => 丁目名 = Some(value),
+                "小字名" => 小字名 = Some(value),
+                "予備名" => 予備名 = Some(value),
+                "地番" => 地番 = Some(value),
+                "座標値種別" => 座標値種別 = Some(value),
+                "筆界未定構成筆" => 筆界未定構成筆.push(parse_constituent_fude(&entry)),
+                _ => {}
             }
         }
 
         if !options.include_chikugai {
-            let chiban = prop_map
-                .get("地番")
-                .ok_or_else(|| Error::MissingElement("地番".to_string()))?;
-            if chiban.contains("地区外") || chiban.contains("別図") {
-                continue;
+            match 地番.as_ref() {
+                Some(value) if value.contains("地区外") || value.contains("別図") => continue,
+                Some(_) => {}
+                None => return Err(Error::MissingElement("地番".to_string())),
             }
-        }
-
-        // if 筆界未定構成筆 exists, let's extract each one out, create a 筆界未定構成筆 struct, then put it in the output feature
-        let mut 筆界未定構成筆 = vec![];
-
-        // Parse 筆界未定構成筆 elements
-        for constituent_fude in fude.children().filter(|child| {
-            child.tag_name().name() == "筆界未定構成筆"
-                && child.tag_name().namespace() == get_xml_namespace(None)
-        }) {
-            let mut constituent_props: HashMap<String, String> = HashMap::new();
-
-            // Extract all properties from the constituent fude
-            for constituent_entry in constituent_fude
-                .children()
-                .filter(|child| child.is_element())
-            {
-                let name = constituent_entry.tag_name().name();
-                let value = constituent_entry.text().unwrap_or("").to_string();
-                constituent_props.insert(name.to_string(), value);
-            }
-
-            // Create the 筆界未定構成筆 struct
-            let constituent = crate::parse::筆界未定構成筆 {
-                大字コード: constituent_props
-                    .get("大字コード")
-                    .cloned()
-                    .unwrap_or_default(),
-                丁目コード: constituent_props
-                    .get("丁目コード")
-                    .cloned()
-                    .unwrap_or_default(),
-                小字コード: constituent_props
-                    .get("小字コード")
-                    .cloned()
-                    .unwrap_or_default(),
-                予備コード: constituent_props
-                    .get("予備コード")
-                    .cloned()
-                    .unwrap_or_default(),
-                大字名: constituent_props.get("大字名").cloned(),
-                丁目名: constituent_props.get("丁目名").cloned(),
-                小字名: constituent_props.get("小字名").cloned(),
-                予備名: constituent_props.get("予備名").cloned(),
-                地番: constituent_props.get("地番").cloned().unwrap_or_default(),
-            };
-
-            筆界未定構成筆.push(constituent);
         }
 
         let geometry = geometry.ok_or_else(|| Error::MissingElement("geometry".to_string()))?;
+        let 大字コード =
+            大字コード.ok_or_else(|| Error::MissingElement("大字コード".to_string()))?;
+        let 丁目コード =
+            丁目コード.ok_or_else(|| Error::MissingElement("丁目コード".to_string()))?;
+        let 小字コード =
+            小字コード.ok_or_else(|| Error::MissingElement("小字コード".to_string()))?;
+        let 予備コード =
+            予備コード.ok_or_else(|| Error::MissingElement("予備コード".to_string()))?;
+        let 地番 = 地番.ok_or_else(|| Error::MissingElement("地番".to_string()))?;
+
         let pop = point_on_polygon(&geometry)?;
         features.push(Feature {
             geometry,
             props: FeatureProperties {
-                筆id: fude_id.to_string(),
-                精度区分: prop_map.remove("精度区分"),
-                大字コード: prop_map
-                    .remove("大字コード")
-                    .ok_or_else(|| Error::MissingElement("大字コード".to_string()))?,
-                丁目コード: prop_map
-                    .remove("丁目コード")
-                    .ok_or_else(|| Error::MissingElement("丁目コード".to_string()))?,
-                小字コード: prop_map
-                    .remove("小字コード")
-                    .ok_or_else(|| Error::MissingElement("小字コード".to_string()))?,
-                予備コード: prop_map
-                    .remove("予備コード")
-                    .ok_or_else(|| Error::MissingElement("予備コード".to_string()))?,
-                大字名: prop_map.remove("大字名"),
-                丁目名: prop_map.remove("丁目名"),
-                小字名: prop_map.remove("小字名"),
-                予備名: prop_map.remove("予備名"),
-                地番: prop_map
-                    .remove("地番")
-                    .ok_or_else(|| Error::MissingElement("地番".to_string()))?,
-                座標値種別: prop_map.remove("座標値種別"),
+                筆id: fude_id,
+                精度区分,
+                大字コード,
+                丁目コード,
+                小字コード,
+                予備コード,
+                大字名,
+                丁目名,
+                小字名,
+                予備名,
+                地番,
+                座標値種別,
                 筆界未定構成筆,
                 代表点緯度: pop.y(),
                 代表点経度: pop.x(),
             },
         });
     }
+
     Ok(features)
 }
 
 fn parse_base_properties(root: &Node) -> Result<CommonProperties> {
-    let map_name = get_child_element(root, "地図名")?
-        .text()
-        .ok_or_else(|| Error::MissingElement("地図名".to_string()))?;
-    let city_code = get_child_element(root, "市区町村コード")?
-        .text()
-        .ok_or_else(|| Error::MissingElement("市区町村コード".to_string()))?;
-    let city_name = get_child_element(root, "市区町村名")?
-        .text()
-        .ok_or_else(|| Error::MissingElement("市区町村名".to_string()))?;
-    let crs = get_child_element(root, "座標系")?
-        .text()
-        .ok_or_else(|| Error::MissingElement("座標系".to_string()))?;
-    let crs_det_elem = get_child_element(root, "測地系判別").ok();
-    let crs_det = crs_det_elem.map(|crs_det_elem| crs_det_elem.text().unwrap().to_string());
+    let map_name = child_text(root, "地図名")?;
+    let city_code = child_text(root, "市区町村コード")?;
+    let city_name = child_text(root, "市区町村名")?;
+    let crs = child_text(root, "座標系")?;
+    let crs_det = get_child_element(root, "測地系判別")
+        .ok()
+        .and_then(|elem| elem.text().map(|text| text.to_string()));
 
     Ok(CommonProperties {
-        地図名: map_name.to_string(),
-        市区町村コード: city_code.to_string(),
-        市区町村名: city_name.to_string(),
-        座標系: crs.to_string(),
+        地図名: map_name,
+        市区町村コード: city_code,
+        市区町村名: city_name,
+        座標系: crs,
         測地系判別: crs_det,
     })
 }
@@ -480,10 +433,7 @@ pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<Pars
 
     let common_props = parse_base_properties(&root)?;
 
-    let crs_string = get_child_element(&root, "座標系")?
-        .text()
-        .ok_or_else(|| Error::MissingElement("座標系".to_string()))?;
-    let crs = get_proj(crs_string)?;
+    let crs = get_proj(&common_props.座標系)?;
     if crs.is_none() && !options.include_arbitrary_crs {
         return Ok(ParsedXML {
             file_name,
@@ -514,6 +464,8 @@ pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<Pars
 #[cfg(test)]
 mod tests {
     use super::*;
+    use geo::{Area, BooleanOps};
+    use geo_types::wkt;
     use std::fs;
     use std::path::Path;
 
@@ -547,6 +499,13 @@ mod tests {
         let feature = &features[0];
         assert_eq!(feature.props.筆id, "H000000001");
         assert_eq!(feature.props.地番, "1");
+
+        let expected_geom = wkt! { POLYGON((130.65198936727597 30.31578177961301,130.65211112748588 30.31578250940004,130.65219722479674 30.315750035783307,130.6522397846286 30.315738240687146,130.65232325284867 30.315702331871517,130.6523668021 30.315675347347664,130.65235722919192 30.315650702546424,130.65229088479316 30.315622397556787,130.65227074994843 30.315602911975944,130.65225984787858 30.31558659939628,130.65223178039858 30.315557954059944,130.65219646886888 30.31555482900659,130.65216213192443 30.315543677500482,130.65214529987352 30.315560610998826,130.6521265046212 30.315576961906185,130.6521020960529 30.315589887800154,130.65207800626484 30.315597933967023,130.65192456437038 30.315643904777097,130.65190509850768 30.3156499243803,130.65198936727597 30.31578177961301)) };
+        let difference = feature.geometry.difference(&expected_geom);
+        assert!(
+            difference.unsigned_area() < 1e-10,
+            "Geometries do not match"
+        );
     }
 
     #[test]

@@ -141,7 +141,7 @@ pub fn process_files(
         handles.push(thread::spawn(move || {
             let mut writer = make_writer_by_ext(&output_path).unwrap();
             while let Ok(parsed_xml) = writer_rx.recv() {
-                info!("[GPQ] Adding features from file: {}", parsed_xml.file_name);
+                info!("[OUT] Adding features from file: {}", parsed_xml.file_name);
                 let write_result = writer.add_xml_features(parsed_xml);
                 match write_result {
                     Ok(_) => {
@@ -152,13 +152,13 @@ pub fn process_files(
                     }
                 }
             }
-            info!("[GPQ] Starting output file: {}", output_path.display());
+            info!("[OUT] Starting output file: {}", output_path.display());
             let created_file = writer.flush().unwrap();
             if !created_file {
-                info!("[GPQ] No features written");
+                info!("[OUT] No features written");
                 has_features.fetch_sub(1, Ordering::Relaxed);
             } else {
-                info!("[GPQ] Finished writing file: {}", output_path.display());
+                info!("[OUT] Finished writing file: {}", output_path.display());
                 has_features.fetch_add(1, Ordering::Relaxed);
             }
         }));
