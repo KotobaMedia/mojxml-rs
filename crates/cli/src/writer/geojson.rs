@@ -8,7 +8,7 @@ use anyhow::Result;
 use geojson::GeoJson;
 use serde::Serialize;
 
-use crate::parse::ParsedXML;
+use mojxml_parser::{CommonProperties, FeatureProperties, ParsedXML};
 
 /// A GeoJSON writer
 ///
@@ -57,7 +57,7 @@ impl crate::writer::shared::Writer for GeoJsonWriter {
 #[derive(Serialize)]
 struct OutputProps<'a> {
     #[serde(flatten)]
-    shared: &'a crate::parse::CommonProperties,
+    shared: &'a CommonProperties,
     #[serde(flatten)]
-    feature: &'a crate::parse::FeatureProperties,
+    feature: &'a FeatureProperties,
 }

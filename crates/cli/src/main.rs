@@ -5,15 +5,11 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-mod constants;
-mod error;
-mod parse;
 mod processor;
-mod reader;
 mod writer;
 
 use clap::Parser;
-use parse::ParseOptions;
+use mojxml_parser::ParseOptions;
 use std::{
     fs::{self, File},
     path::PathBuf,

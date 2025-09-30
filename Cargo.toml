@@ -1,43 +1,21 @@
-[package]
-name = "mojxml-rs"
-description = "A CLI tool to convert MOJ-XML files to GeoParquet, FlatGeobuf, or GeoJSON"
+[workspace]
+members = [
+    "crates/cli",
+    "crates/parser",
+    "crates/reader",
+]
+resolver = "2"
+
+[workspace.package]
+description = "Tools for processing MOJ-XML cadastral data"
 repository = "https://github.com/KotobaMedia/mojxml-rs"
 authors = ["Keitaroh Kobayashi <keita@kotobamedia.com>"]
 version = "0.2.1"
 edition = "2024"
 license = "MIT"
-exclude = [
-  ".github/*",
-  "testdata/*",
-]
 
-[dependencies]
-anyhow = "1"
-clap = { version = "4.5", features = ["derive"] }
-crossbeam-channel = "0.5"
-flatgeobuf = { version = "5.0", default-features = false }
-geo-types = "0.7"
-geojson = "0.24.2"
-geoparquet-batch-writer = "0.1.4"
-geozero = "0.14"
-indicatif = "0.18"
-log = "0.4"
-num_cpus = "1"
-polylabel = "3.2.0"
-proj4rs = "0.1.8"
-roxmltree = "0.20.0"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-simplelog = "0.12"
-tempfile = "3"
-thiserror = "2"
-zip = { version = "5.1", default-features = false, features = ["deflate"] }
-
-[dev-dependencies]
-geo = "0.31"
-
-[target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = { version = "0.6.0" }
+[workspace.metadata.release]
+allow-branch = ["main"]
 
 [profile.release]
 # debug = true
@@ -45,5 +23,9 @@ codegen-units = 1
 lto = false
 panic = "abort"
 
-[package.metadata.release]
-allow-branch = ["main"]
+[workspace.dependencies]
+geo = "0.31"
+geo-types = "0.7"
+geoparquet-batch-writer = "0.1.4"
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"

@@ -1220,6 +1220,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "mojxml-parser"
+version = "0.2.1"
+dependencies = [
+ "geo 0.31.0",
+ "geo-types",
+ "geoparquet-batch-writer",
+ "mojxml-reader",
+ "polylabel",
+ "proj4rs",
+ "roxmltree",
+ "serde",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "mojxml-reader"
+version = "0.2.1"
+dependencies = [
+ "tempfile",
+ "thiserror 2.0.17",
+ "zip",
+]
+
+[[package]]
 name = "mojxml-rs"
 version = "0.2.1"
 dependencies = [
@@ -1234,17 +1258,13 @@ dependencies = [
  "geozero",
  "indicatif",
  "log",
+ "mojxml-parser",
  "num_cpus",
- "polylabel",
- "proj4rs",
- "roxmltree",
  "serde",
  "serde_json",
  "simplelog",
  "tempfile",
- "thiserror 2.0.17",
  "tikv-jemallocator",
- "zip",
 ]
 
 [[package]]

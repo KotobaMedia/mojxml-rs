@@ -166,9 +166,12 @@ mod tests {
     use std::path::PathBuf;
 
     fn testdata_path() -> PathBuf {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("testdata");
-        path
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .join("testdata")
     }
 
     #[test]

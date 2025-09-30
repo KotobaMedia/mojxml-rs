@@ -1,7 +1,8 @@
+use crate::FileData;
 use crate::constants::{get_proj, get_xml_namespace};
 use crate::error::{Error, Result};
-use crate::reader::FileData;
 use geo_types::{LineString, Point, Polygon};
+#[cfg(feature = "geoparquet")]
 use geoparquet_batch_writer::GeoParquetRowStruct;
 use polylabel::polylabel;
 use proj4rs::proj::Proj;
@@ -136,7 +137,8 @@ pub struct FeatureProperties {
     pub 代表点経度: f64,
 }
 
-#[derive(Debug, Clone, GeoParquetRowStruct, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
+#[cfg_attr(feature = "geoparquet", derive(GeoParquetRowStruct))]
 pub struct 筆界未定構成筆 {
     pub 大字コード: String,
     pub 丁目コード: String,
@@ -467,13 +469,21 @@ mod tests {
     use geo::{Area, BooleanOps};
     use geo_types::wkt;
     use std::fs;
-    use std::path::Path;
+    use std::path::PathBuf;
+
+    fn testdata_path() -> PathBuf {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .join("testdata")
+    }
 
     #[test]
     fn test_parse_xml_content() {
         // Construct the path relative to the Cargo manifest directory
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let xml_path = Path::new(&manifest_dir).join("testdata/46505-3411-56.xml");
+        let xml_path = testdata_path().join("46505-3411-56.xml");
         let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
         let options = ParseOptions {
             include_arbitrary_crs: true,
@@ -511,8 +521,7 @@ mod tests {
     #[test]
     fn test_parse_chikugai_miten_kosei_features() {
         // Test parsing of 筆界未定構成筆 elements
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let xml_path = Path::new(&manifest_dir).join("testdata/46505-3411-56.xml");
+        let xml_path = testdata_path().join("46505-3411-56.xml");
         let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
         let options = ParseOptions {
             include_arbitrary_crs: true,
