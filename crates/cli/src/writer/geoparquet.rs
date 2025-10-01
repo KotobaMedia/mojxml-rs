@@ -58,7 +58,7 @@ impl crate::writer::shared::Writer for GeoParquetWriter {
         // Write each feature, consuming the parsed data
         for feature in parsed.features {
             self.has_features = true;
-            let geometry: Polygon<f64> = feature.geometry.into();
+            let geometry: Polygon<f64> = feature.geometry;
 
             let FeatureProperties {
                 筆id,

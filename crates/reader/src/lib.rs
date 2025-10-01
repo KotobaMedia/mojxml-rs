@@ -44,7 +44,7 @@ fn read_xml_file(path: &Path) -> Result<FileData, ReaderError> {
         .to_string();
     Ok(FileData {
         file_name: name,
-        contents: contents,
+        contents,
     })
 }
 
@@ -157,10 +157,7 @@ impl<R: Read + Seek> Iterator for ZipXmlIter<R> {
                 return Some(item);
             }
 
-            let idx = match self.next_index() {
-                Some(next_idx) => next_idx,
-                None => return None,
-            };
+            let idx = self.next_index()?;
 
             match self.process_entry(idx) {
                 Ok(EntryDecision::Emit(data)) => return Some(Ok(data)),

@@ -30,8 +30,15 @@ jobs:
           # Fix to 1.89.0 until https://github.com/rust-lang/rust/issues/131960 is solved
           toolchain: 1.89.0
           target: ${{ matrix.job.arch }}
+          components: clippy, rustfmt
 
-      - name: Build
+      - name: Rust fmt check
+        run: cargo fmt --check
+
+      - name: Clippy check
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Release build check
         run: cargo build --release --target ${{ matrix.job.arch }}
 
       - name: Run test
