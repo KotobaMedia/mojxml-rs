@@ -1238,7 +1238,6 @@ dependencies = [
 name = "mojxml-reader"
 version = "0.2.1"
 dependencies = [
- "tempfile",
  "thiserror 2.0.17",
  "zip",
 ]
