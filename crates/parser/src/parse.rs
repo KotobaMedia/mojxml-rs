@@ -110,7 +110,7 @@ fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
     Ok(pop)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ParseOptions {
     pub include_arbitrary_crs: bool,
     pub include_chikugai: bool,
