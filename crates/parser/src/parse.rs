@@ -1,13 +1,11 @@
-use crate::FileData;
 use crate::constants::{get_proj, get_xml_namespace};
 use crate::error::{Error, Result};
+use crate::types::{CommonProperties, Feature, FeatureProperties};
+use crate::{FileData, ParsedXML, 筆界未定構成筆};
 use geo_types::{LineString, Point, Polygon};
-#[cfg(feature = "geoparquet")]
-use geoparquet_batch_writer::GeoParquetRowStruct;
 use polylabel::polylabel;
 use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
-use serde::Serialize;
 use std::collections::HashMap;
 
 // --- Type Aliases ---
@@ -107,57 +105,9 @@ fn parse_constituent_fude(node: &Node) -> 筆界未定構成筆 {
     constituent
 }
 
-#[derive(Debug, Clone)]
-pub struct Feature {
-    pub geometry: Polygon,
-    pub props: FeatureProperties,
-}
-
 fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
     let pop = polylabel(polygon, &0.001)?;
     Ok(pop)
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct FeatureProperties {
-    pub 筆id: String,
-    pub 精度区分: Option<String>,
-    pub 大字コード: String,
-    pub 丁目コード: String,
-    pub 小字コード: String,
-    pub 予備コード: String,
-    pub 大字名: Option<String>,
-    pub 丁目名: Option<String>,
-    pub 小字名: Option<String>,
-    pub 予備名: Option<String>,
-    pub 地番: String,
-    pub 座標値種別: Option<String>,
-    pub 筆界未定構成筆: Vec<筆界未定構成筆>,
-    pub 代表点緯度: f64,
-    pub 代表点経度: f64,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-#[cfg_attr(feature = "geoparquet", derive(GeoParquetRowStruct))]
-pub struct 筆界未定構成筆 {
-    pub 大字コード: String,
-    pub 丁目コード: String,
-    pub 小字コード: String,
-    pub 予備コード: String,
-    pub 大字名: Option<String>,
-    pub 丁目名: Option<String>,
-    pub 小字名: Option<String>,
-    pub 予備名: Option<String>,
-    pub 地番: String,
-}
-
-#[derive(Serialize)]
-pub struct CommonProperties {
-    pub 地図名: String,
-    pub 市区町村コード: String,
-    pub 市区町村名: String,
-    pub 座標系: String,
-    pub 測地系判別: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -419,12 +369,6 @@ fn parse_base_properties(root: &Node) -> Result<CommonProperties> {
         座標系: crs,
         測地系判別: crs_det,
     })
-}
-
-pub struct ParsedXML {
-    pub file_name: String,
-    pub features: Vec<Feature>,
-    pub common_props: CommonProperties,
 }
 
 // --- Main Parsing Function ---
