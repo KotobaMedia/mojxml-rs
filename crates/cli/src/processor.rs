@@ -1,10 +1,9 @@
-use crate::parse::{ParseOptions, ParsedXML};
-use crate::reader::{FileData, iter_xml_contents};
 use crate::writer::make_writer_by_ext;
 use anyhow::Result;
 use crossbeam_channel::{bounded, unbounded};
 use indicatif::{MultiProgress, ProgressStyle};
 use log::{error, info};
+use mojxml_parser::{FileData, ParseOptions, ParsedXML, iter_xml_contents, parse_xml_content};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI8, AtomicUsize, Ordering};
@@ -112,7 +111,7 @@ pub fn process_files(
         handles.push(thread::spawn(move || {
             while let Ok(file_data) = parser_rx.recv() {
                 info!("[XML {:>2}] Parsing file: {}", i, file_data.file_name);
-                let parsed_xml = crate::parse::parse_xml_content(&file_data, &options);
+                let parsed_xml = parse_xml_content(&file_data, &options);
                 match parsed_xml {
                     Ok(parsed) => {
                         info!("[XML {:>2}] Parsed file: {}", i, file_data.file_name);

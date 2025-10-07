@@ -10,7 +10,7 @@ use flatgeobuf::{
     geozero::{ColumnValue, PropertyProcessor},
 };
 
-use crate::parse::ParsedXML;
+use mojxml_parser::ParsedXML;
 
 pub struct FlatGeobufWriter<'a> {
     fgb: FgbWriter<'a>,

@@ -1,7 +1,7 @@
-use crate::parse::{FeatureProperties, ParsedXML, 筆界未定構成筆};
 use anyhow::Result;
 use geo_types::Polygon;
 use geoparquet_batch_writer::{BatchConfig, GeoParquetBatchWriter, GeoParquetRowData};
+use mojxml_parser::{FeatureProperties, ParsedXML, 筆界未定構成筆};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, GeoParquetRowData)]
@@ -58,7 +58,7 @@ impl crate::writer::shared::Writer for GeoParquetWriter {
         // Write each feature, consuming the parsed data
         for feature in parsed.features {
             self.has_features = true;
-            let geometry: Polygon<f64> = feature.geometry.into();
+            let geometry: Polygon<f64> = feature.geometry;
 
             let FeatureProperties {
                 筆id,
@@ -129,16 +129,18 @@ impl crate::writer::shared::Writer for GeoParquetWriter {
 mod tests {
     use geo_types::polygon;
 
-    use crate::{
-        parse::{CommonProperties, Feature, FeatureProperties},
-        writer::shared::Writer,
-    };
+    use crate::writer::shared::Writer;
+    use mojxml_parser::{CommonProperties, Feature, FeatureProperties};
 
     use super::*;
     use std::path::PathBuf;
 
     fn testdata_path() -> PathBuf {
-        PathBuf::from("testdata")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .join("testdata")
     }
 
     #[test]

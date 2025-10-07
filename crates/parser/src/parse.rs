@@ -1,12 +1,11 @@
 use crate::constants::{get_proj, get_xml_namespace};
 use crate::error::{Error, Result};
-use crate::reader::FileData;
+use crate::types::{CommonProperties, Feature, FeatureProperties};
+use crate::{FileData, ParsedXML, 筆界未定構成筆};
 use geo_types::{LineString, Point, Polygon};
-use geoparquet_batch_writer::GeoParquetRowStruct;
 use polylabel::polylabel;
 use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
-use serde::Serialize;
 use std::collections::HashMap;
 
 // --- Type Aliases ---
@@ -106,59 +105,12 @@ fn parse_constituent_fude(node: &Node) -> 筆界未定構成筆 {
     constituent
 }
 
-#[derive(Debug, Clone)]
-pub struct Feature {
-    pub geometry: Polygon,
-    pub props: FeatureProperties,
-}
-
 fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
     let pop = polylabel(polygon, &0.001)?;
     Ok(pop)
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct FeatureProperties {
-    pub 筆id: String,
-    pub 精度区分: Option<String>,
-    pub 大字コード: String,
-    pub 丁目コード: String,
-    pub 小字コード: String,
-    pub 予備コード: String,
-    pub 大字名: Option<String>,
-    pub 丁目名: Option<String>,
-    pub 小字名: Option<String>,
-    pub 予備名: Option<String>,
-    pub 地番: String,
-    pub 座標値種別: Option<String>,
-    pub 筆界未定構成筆: Vec<筆界未定構成筆>,
-    pub 代表点緯度: f64,
-    pub 代表点経度: f64,
-}
-
-#[derive(Debug, Clone, GeoParquetRowStruct, Default, Serialize)]
-pub struct 筆界未定構成筆 {
-    pub 大字コード: String,
-    pub 丁目コード: String,
-    pub 小字コード: String,
-    pub 予備コード: String,
-    pub 大字名: Option<String>,
-    pub 丁目名: Option<String>,
-    pub 小字名: Option<String>,
-    pub 予備名: Option<String>,
-    pub 地番: String,
-}
-
-#[derive(Serialize)]
-pub struct CommonProperties {
-    pub 地図名: String,
-    pub 市区町村コード: String,
-    pub 市区町村名: String,
-    pub 座標系: String,
-    pub 測地系判別: Option<String>,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ParseOptions {
     pub include_arbitrary_crs: bool,
     pub include_chikugai: bool,
@@ -419,12 +371,6 @@ fn parse_base_properties(root: &Node) -> Result<CommonProperties> {
     })
 }
 
-pub struct ParsedXML {
-    pub file_name: String,
-    pub features: Vec<Feature>,
-    pub common_props: CommonProperties,
-}
-
 // --- Main Parsing Function ---
 pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<ParsedXML> {
     let file_name = file.file_name.clone();
@@ -467,13 +413,21 @@ mod tests {
     use geo::{Area, BooleanOps};
     use geo_types::wkt;
     use std::fs;
-    use std::path::Path;
+    use std::path::PathBuf;
+
+    fn testdata_path() -> PathBuf {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .join("testdata")
+    }
 
     #[test]
     fn test_parse_xml_content() {
         // Construct the path relative to the Cargo manifest directory
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let xml_path = Path::new(&manifest_dir).join("testdata/46505-3411-56.xml");
+        let xml_path = testdata_path().join("46505-3411-56.xml");
         let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
         let options = ParseOptions {
             include_arbitrary_crs: true,
@@ -511,8 +465,7 @@ mod tests {
     #[test]
     fn test_parse_chikugai_miten_kosei_features() {
         // Test parsing of 筆界未定構成筆 elements
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let xml_path = Path::new(&manifest_dir).join("testdata/46505-3411-56.xml");
+        let xml_path = testdata_path().join("46505-3411-56.xml");
         let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
         let options = ParseOptions {
             include_arbitrary_crs: true,

@@ -1,0 +1,30 @@
+[package]
+name = "mojxml-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Parse MOJ cadastral XML parcels into geometries and attributes"
+
+[features]
+default = []
+geoparquet = ["dep:geoparquet-batch-writer"]
+
+[dependencies]
+geo-types = { workspace = true }
+geoparquet-batch-writer = { workspace = true, optional = true }
+polylabel = "3.2.0"
+proj4rs = "0.1.8"
+roxmltree = "0.20.0"
+serde = { workspace = true }
+mojxml-reader = { path = "../reader" }
+thiserror = "2"
+
+[dev-dependencies]
+criterion = { version = "0.7", features = ["html_reports"] }
+geo = { workspace = true }
+
+[[bench]]
+name = "parser_bench"
+harness = false

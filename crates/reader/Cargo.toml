@@ -1,0 +1,12 @@
+[package]
+name = "mojxml-reader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Read MOJ cadastral XML and ZIP archives"
+
+[dependencies]
+thiserror = "2"
+zip = { version = "5.1", default-features = false, features = ["deflate"] }

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::parse::ParsedXML;
+use mojxml_parser::ParsedXML;
 
 pub trait Writer: Send {
     /// Create a new instance

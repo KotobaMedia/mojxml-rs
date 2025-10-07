@@ -1,8 +1,8 @@
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Cursor, Read, Seek};
 use std::path::Path;
-use tempfile::NamedTempFile;
 use zip::ZipArchive;
+use zip::read::ZipFile;
 
 pub struct FileData {
     pub file_name: String,
@@ -15,8 +15,6 @@ pub enum ReaderError {
     Io(#[from] io::Error),
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
-    #[error("UTF-8 error: {0}")]
-    Utf8(#[from] std::string::FromUtf8Error),
 }
 
 pub fn iter_xml_contents(
@@ -38,7 +36,7 @@ pub fn iter_xml_contents(
 }
 
 fn read_xml_file(path: &Path) -> Result<FileData, ReaderError> {
-    let contents = std::fs::read(path)?;
+    let contents = std::fs::read_to_string(path)?;
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -46,15 +44,21 @@ fn read_xml_file(path: &Path) -> Result<FileData, ReaderError> {
         .to_string();
     Ok(FileData {
         file_name: name,
-        contents: String::from_utf8(contents)?,
+        contents,
     })
 }
 
-// streaming ZIP/XML iterator without collecting
+// streaming ZIP/XML iterator with nested ZIP support
 struct ZipXmlIter<R: Read + Seek> {
     archive: ZipArchive<R>,
     index: usize,
-    nested: Option<Box<ZipXmlIter<std::fs::File>>>,
+    nested: Option<Box<ZipXmlIter<Cursor<Vec<u8>>>>>,
+}
+
+enum EntryDecision {
+    Emit(FileData),
+    QueueNested(ZipXmlIter<Cursor<Vec<u8>>>),
+    Skip,
 }
 
 impl<R: Read + Seek> ZipXmlIter<R> {
@@ -65,89 +69,104 @@ impl<R: Read + Seek> ZipXmlIter<R> {
             nested: None,
         }
     }
+
+    fn next_index(&mut self) -> Option<usize> {
+        if self.index >= self.archive.len() {
+            return None;
+        }
+        let idx = self.index;
+        self.index += 1;
+        Some(idx)
+    }
+
+    fn drain_nested(&mut self) -> Option<Result<FileData, ReaderError>> {
+        if let Some(nested_iter) = &mut self.nested {
+            if let Some(item) = nested_iter.next() {
+                return Some(item);
+            }
+            self.nested = None;
+        }
+        None
+    }
+
+    fn process_entry(&mut self, index: usize) -> Result<EntryDecision, ReaderError> {
+        let mut entry = self.archive.by_index(index)?;
+        let entry_path = match entry.enclosed_name() {
+            Some(path) => path.to_path_buf(),
+            None => return Ok(EntryDecision::Skip),
+        };
+
+        if entry.is_dir() {
+            return Ok(EntryDecision::Skip);
+        }
+
+        match Self::extension_lowercase(&entry_path).as_deref() {
+            Some("xml") => Self::read_xml_entry(&mut entry, &entry_path).map(EntryDecision::Emit),
+            Some("zip") => Self::build_nested_iterator(&mut entry)
+                .map(|opt_iter| opt_iter.map_or(EntryDecision::Skip, EntryDecision::QueueNested)),
+            _ => Ok(EntryDecision::Skip),
+        }
+    }
+
+    fn read_xml_entry(
+        entry: &mut ZipFile<'_, R>,
+        entry_path: &Path,
+    ) -> Result<FileData, ReaderError> {
+        let name = entry_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let mut contents = String::new();
+        entry.read_to_string(&mut contents)?;
+
+        Ok(FileData {
+            file_name: name,
+            contents,
+        })
+    }
+
+    fn build_nested_iterator(
+        entry: &mut ZipFile<'_, R>,
+    ) -> Result<Option<ZipXmlIter<Cursor<Vec<u8>>>>, ReaderError> {
+        let mut buffer = Vec::new();
+        entry.read_to_end(&mut buffer)?;
+
+        if buffer.is_empty() {
+            return Ok(None);
+        }
+
+        let cursor = Cursor::new(buffer);
+        let nested_archive = ZipArchive::new(cursor)?;
+        Ok(Some(ZipXmlIter::new(nested_archive)))
+    }
+
+    fn extension_lowercase(path: &Path) -> Option<String> {
+        path.extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+    }
 }
 
 impl<R: Read + Seek> Iterator for ZipXmlIter<R> {
     type Item = Result<FileData, ReaderError>;
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            // first, drain any nested iterator
-            if let Some(n) = &mut self.nested {
-                if let Some(item) = n.next() {
-                    return Some(item);
-                }
-                self.nested = None;
+            if let Some(item) = self.drain_nested() {
+                return Some(item);
             }
-            // if we've exhausted entries, stop
-            if self.index >= self.archive.len() {
-                return None;
-            }
-            let idx = self.index;
-            self.index += 1;
-            // pull the next entry
-            let mut entry = match self.archive.by_index(idx) {
-                Ok(e) => e,
-                Err(e) => return Some(Err(ReaderError::Zip(e))),
-            };
-            let entry_path = match entry.enclosed_name() {
-                Some(p) => p.to_path_buf(),
-                None => continue,
-            };
-            let ext = entry_path
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase());
-            match ext.as_deref() {
-                Some("xml") => {
-                    let name = entry_path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let mut contents = String::new();
-                    if let Err(e) = entry.read_to_string(&mut contents) {
-                        return Some(Err(ReaderError::Io(e)));
-                    }
-                    return Some(Ok(FileData {
-                        file_name: name,
-                        contents,
-                    }));
+
+            let idx = self.next_index()?;
+
+            match self.process_entry(idx) {
+                Ok(EntryDecision::Emit(data)) => return Some(Ok(data)),
+                Ok(EntryDecision::QueueNested(nested)) => {
+                    self.nested = Some(Box::new(nested));
+                    continue;
                 }
-                Some("zip") if !entry.is_dir() => {
-                    // prepare nested ZIP iterator
-                    match NamedTempFile::new() {
-                        Ok(mut tmp) => {
-                            if let Err(e) = io::copy(&mut entry, tmp.as_file_mut()) {
-                                return Some(Err(ReaderError::Io(e)));
-                            }
-                            if let Err(e) = tmp.as_file_mut().seek(SeekFrom::Start(0)) {
-                                return Some(Err(ReaderError::Io(e)));
-                            }
-                            // clone handle for ZipArchive
-                            match tmp
-                                .as_file()
-                                .try_clone()
-                                .and_then(|mut f| f.seek(SeekFrom::Start(0)).map(|_| f))
-                            {
-                                Ok(cloned_file) => match ZipArchive::new(cloned_file) {
-                                    Ok(nested_arc) => {
-                                        let mut nested_it = ZipXmlIter::new(nested_arc);
-                                        if let Some(item) = nested_it.next() {
-                                            self.nested = Some(Box::new(nested_it));
-                                            return Some(item);
-                                        } else {
-                                            continue;
-                                        }
-                                    }
-                                    Err(e) => return Some(Err(ReaderError::Zip(e))),
-                                },
-                                Err(e) => return Some(Err(ReaderError::Io(e))),
-                            }
-                        }
-                        Err(e) => return Some(Err(ReaderError::Io(e))),
-                    }
-                }
-                _ => continue,
+                Ok(EntryDecision::Skip) => continue,
+                Err(err) => return Some(Err(err)),
             }
         }
     }
@@ -166,9 +185,12 @@ mod tests {
     use std::path::PathBuf;
 
     fn testdata_path() -> PathBuf {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("testdata");
-        path
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .join("testdata")
     }
 
     #[test]
