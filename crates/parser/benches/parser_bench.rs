@@ -18,7 +18,7 @@ fn bench_main(c: &mut Criterion) {
     let mut group = c.benchmark_group("XML Parsing");
     group.warm_up_time(Duration::from_secs(20));
 
-    group.bench_function("roxmltree", |b| b.iter(|| roxmltree_parse()));
+    group.bench_function("roxmltree", |b| b.iter(roxmltree_parse));
 
     group.finish();
 }
