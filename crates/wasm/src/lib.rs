@@ -4,8 +4,8 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 pub fn parse_xml_content(file_name: &str, xml_content: &str) -> Result<String, JsValue> {
     let parse_options = mojxml_parser::ParseOptions {
-        include_arbitrary_crs: true,
-        include_chikugai: true,
+        include_arbitrary_crs: false,
+        include_chikugai: false,
     };
     let parsed = mojxml_parser::parse_xml_content(
         &(file_name.to_string(), xml_content.to_string()),
