@@ -18,7 +18,6 @@ polylabel = "3.2.0"
 proj4rs = "0.1.8"
 roxmltree = "0.20.0"
 serde = { workspace = true }
-mojxml-reader = { path = "../reader" }
 thiserror = "2"
 
 [dev-dependencies]

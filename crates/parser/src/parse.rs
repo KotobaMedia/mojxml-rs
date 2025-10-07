@@ -1,7 +1,7 @@
 use crate::constants::{get_proj, get_xml_namespace};
 use crate::error::{Error, Result};
 use crate::types::{CommonProperties, Feature, FeatureProperties};
-use crate::{FileData, ParsedXML, 筆界未定構成筆};
+use crate::{ParsedXML, 筆界未定構成筆};
 use geo_types::{LineString, Point, Polygon};
 use polylabel::polylabel;
 use proj4rs::proj::Proj;
@@ -371,10 +371,12 @@ fn parse_base_properties(root: &Node) -> Result<CommonProperties> {
     })
 }
 
+type FileData = (String, String); // (file_name, contents)
+
 // --- Main Parsing Function ---
 pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<ParsedXML> {
-    let file_name = file.file_name.clone();
-    let doc = Document::parse(&file.contents)?;
+    let file_name = file.0.clone();
+    let doc = Document::parse(&file.1)?;
     let root = doc.root_element();
 
     let common_props = parse_base_properties(&root)?;
@@ -437,14 +439,8 @@ mod tests {
             file_name: _,
             features,
             common_props,
-        } = parse_xml_content(
-            &FileData {
-                file_name: "46505-3411-56.xml".to_string(),
-                contents: xml_temp,
-            },
-            &options,
-        )
-        .expect("Failed to parse XML");
+        } = parse_xml_content(&("46505-3411-56.xml".to_string(), xml_temp), &options)
+            .expect("Failed to parse XML");
         assert_eq!(common_props.地図名, "AYA1anbou22B04_2000");
         assert_eq!(common_props.市区町村コード, "46505");
         assert_eq!(common_props.市区町村名, "熊毛郡屋久島町");
@@ -475,14 +471,8 @@ mod tests {
             file_name: _,
             features,
             common_props: _,
-        } = parse_xml_content(
-            &FileData {
-                file_name: "46505-3411-56.xml".to_string(),
-                contents: xml_temp,
-            },
-            &options,
-        )
-        .expect("Failed to parse XML");
+        } = parse_xml_content(&("46505-3411-56.xml".to_string(), xml_temp), &options)
+            .expect("Failed to parse XML");
 
         // Find a feature with 筆界未定構成筆 data
         let features_with_chikugai: Vec<_> = features

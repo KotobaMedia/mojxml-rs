@@ -3,7 +3,8 @@ use anyhow::Result;
 use crossbeam_channel::{bounded, unbounded};
 use indicatif::{MultiProgress, ProgressStyle};
 use log::{error, info};
-use mojxml_parser::{FileData, ParseOptions, ParsedXML, iter_xml_contents, parse_xml_content};
+use mojxml_parser::{ParseOptions, ParsedXML, parse_xml_content};
+use mojxml_reader::iter_xml_contents;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI8, AtomicUsize, Ordering};
@@ -35,7 +36,7 @@ pub fn process_files(
             .with_message("unzipping"),
     );
     // Parser channels
-    let (parser_tx, parser_rx) = bounded::<FileData>(concurrency);
+    let (parser_tx, parser_rx) = bounded::<(String, String)>(concurrency);
     let parser_pb = m.add(
         indicatif::ProgressBar::new(0)
             .with_style(sty.clone())
@@ -76,8 +77,8 @@ pub fn process_files(
                             info!(
                                 "[ZIP {:>2}] Got XML: {}, size: {}",
                                 i,
-                                file_data.file_name,
-                                file_data.contents.len()
+                                file_data.0,
+                                file_data.1.len()
                             );
                             xml_files.fetch_add(1, Ordering::Relaxed);
                             parser_pb.inc_length(1);
@@ -110,21 +111,18 @@ pub fn process_files(
         let options = parse_options.clone();
         handles.push(thread::spawn(move || {
             while let Ok(file_data) = parser_rx.recv() {
-                info!("[XML {:>2}] Parsing file: {}", i, file_data.file_name);
+                info!("[XML {:>2}] Parsing file: {}", i, file_data.0);
                 let parsed_xml = parse_xml_content(&file_data, &options);
                 match parsed_xml {
                     Ok(parsed) => {
-                        info!("[XML {:>2}] Parsed file: {}", i, file_data.file_name);
+                        info!("[XML {:>2}] Parsed file: {}", i, file_data.0);
                         writer_pb.inc_length(1);
                         parser_pb.inc(1);
                         writer_tx.send(parsed).unwrap();
                     }
                     Err(e) => {
-                        error!(
-                            "[XML {:>2}] Error parsing file {}: {}",
-                            i, file_data.file_name, e
-                        );
-                        eprintln!("Error parsing file {}: {}", file_data.file_name, e);
+                        error!("[XML {:>2}] Error parsing file {}: {}", i, file_data.0, e);
+                        eprintln!("Error parsing file {}: {}", file_data.0, e);
                         parser_pb.inc(1);
                     }
                 }
