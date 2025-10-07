@@ -2,7 +2,7 @@ use wasm_bindgen::prelude::*;
 // use web_sys::console;
 
 #[wasm_bindgen]
-pub fn parse_xml_content(file_name: &str, xml_content: &str) -> JsValue {
+pub fn parse_xml_content(file_name: &str, xml_content: &str) -> Result<String, JsValue> {
     let parse_options = mojxml_parser::ParseOptions {
         include_arbitrary_crs: true,
         include_chikugai: true,
@@ -34,11 +34,11 @@ pub fn parse_xml_content(file_name: &str, xml_content: &str) -> JsValue {
                 bbox: None,
                 foreign_members: None,
             };
-            serde_wasm_bindgen::to_value(&geojson).unwrap()
+            Ok(serde_json::to_string(&geojson).unwrap())
         }
         Err(e) => {
             // console::error_1(&JsValue::from_str(&format!("Error: {:?}", e)));
-            JsValue::from_str(&format!("Error: {:?}", e))
+            Err(format!("Error: {:?}", e).into())
         }
     }
 }
