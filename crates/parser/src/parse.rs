@@ -371,12 +371,14 @@ fn parse_base_properties(root: &Node) -> Result<CommonProperties> {
     })
 }
 
-type FileData = (String, String); // (file_name, contents)
-
 // --- Main Parsing Function ---
-pub fn parse_xml_content(file: &FileData, options: &ParseOptions) -> Result<ParsedXML> {
-    let file_name = file.0.clone();
-    let doc = Document::parse(&file.1)?;
+pub fn parse_xml_content(
+    file_name: &str,
+    file_data: &str,
+    options: &ParseOptions,
+) -> Result<ParsedXML> {
+    let file_name = file_name.to_string();
+    let doc = Document::parse(file_data)?;
     let root = doc.root_element();
 
     let common_props = parse_base_properties(&root)?;
@@ -439,7 +441,7 @@ mod tests {
             file_name: _,
             features,
             common_props,
-        } = parse_xml_content(&("46505-3411-56.xml".to_string(), xml_temp), &options)
+        } = parse_xml_content("46505-3411-56.xml", &xml_temp, &options)
             .expect("Failed to parse XML");
         assert_eq!(common_props.地図名, "AYA1anbou22B04_2000");
         assert_eq!(common_props.市区町村コード, "46505");
@@ -471,7 +473,7 @@ mod tests {
             file_name: _,
             features,
             common_props: _,
-        } = parse_xml_content(&("46505-3411-56.xml".to_string(), xml_temp), &options)
+        } = parse_xml_content("46505-3411-56.xml", &xml_temp, &options)
             .expect("Failed to parse XML");
 
         // Find a feature with 筆界未定構成筆 data

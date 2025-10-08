@@ -110,19 +110,20 @@ pub fn process_files(
         let writer_pb = writer_pb.clone();
         let options = parse_options.clone();
         handles.push(thread::spawn(move || {
-            while let Ok(file_data) = parser_rx.recv() {
-                info!("[XML {:>2}] Parsing file: {}", i, file_data.0);
-                let parsed_xml = parse_xml_content(&file_data, &options);
+            while let Ok((file_name, xml_content)) = parser_rx.recv() {
+                info!("[XML {:>2}] Parsing file: {}", i, file_name);
+                let parsed_xml =
+                    parse_xml_content(&file_name, &xml_content, &options);
                 match parsed_xml {
                     Ok(parsed) => {
-                        info!("[XML {:>2}] Parsed file: {}", i, file_data.0);
+                        info!("[XML {:>2}] Parsed file: {}", i, file_name);
                         writer_pb.inc_length(1);
                         parser_pb.inc(1);
                         writer_tx.send(parsed).unwrap();
                     }
                     Err(e) => {
-                        error!("[XML {:>2}] Error parsing file {}: {}", i, file_data.0, e);
-                        eprintln!("Error parsing file {}: {}", file_data.0, e);
+                        error!("[XML {:>2}] Error parsing file {}: {}", i, file_name, e);
+                        eprintln!("Error parsing file {}: {}", file_name, e);
                         parser_pb.inc(1);
                     }
                 }

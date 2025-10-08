@@ -4,7 +4,8 @@ use std::time::Duration;
 fn roxmltree_parse() {
     let data = include_str!("../../../testdata/46505-3411-56.xml").to_string();
     let _ = mojxml_parser::parse_xml_content(
-        &("46505-3411-56.xml".to_string(), data),
+        "46505-3411-56.xml",
+        &data,
         &Default::default(),
     )
     .unwrap();

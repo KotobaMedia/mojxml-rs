@@ -7,10 +7,7 @@ pub fn parse_xml_content(file_name: &str, xml_content: &str) -> Result<String, J
         include_arbitrary_crs: false,
         include_chikugai: false,
     };
-    let parsed = mojxml_parser::parse_xml_content(
-        &(file_name.to_string(), xml_content.to_string()),
-        &parse_options,
-    );
+    let parsed = mojxml_parser::parse_xml_content(file_name, xml_content, &parse_options);
     match parsed {
         Ok(parsed) => {
             let geojson = geojson::FeatureCollection {
