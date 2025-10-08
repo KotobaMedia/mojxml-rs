@@ -1,14 +1,10 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use mojxml_reader::FileData;
 use std::time::Duration;
 
 fn roxmltree_parse() {
     let data = include_str!("../../../testdata/46505-3411-56.xml").to_string();
     let _ = mojxml_parser::parse_xml_content(
-        &FileData {
-            contents: data,
-            file_name: "46505-3411-56.xml".to_string(),
-        },
+        &("46505-3411-56.xml".to_string(), data),
         &Default::default(),
     )
     .unwrap();

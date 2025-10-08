@@ -1,0 +1,21 @@
+{
+  "name": "web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build:wasm": "wasm-pack build ../crates/wasm --target web --out-name wasm_mojxml",
+    "build:wasm:release": "wasm-pack build ../crates/wasm --target web --out-name wasm_mojxml --release",
+    "dev": "pnpm build:wasm && vite",
+    "build": "pnpm build:wasm:release && tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/geojson": "^7946.0.16",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.7"
+  },
+  "dependencies": {
+    "maplibre-gl": "^5.8.0"
+  }
+}

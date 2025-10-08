@@ -4,10 +4,7 @@ use std::path::Path;
 use zip::ZipArchive;
 use zip::read::ZipFile;
 
-pub struct FileData {
-    pub file_name: String,
-    pub contents: String,
-}
+type FileData = (String, String); // (file_name, contents)
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReaderError {
@@ -42,10 +39,7 @@ fn read_xml_file(path: &Path) -> Result<FileData, ReaderError> {
         .and_then(|s| s.to_str())
         .unwrap_or_default()
         .to_string();
-    Ok(FileData {
-        file_name: name,
-        contents,
-    })
+    Ok((name, contents))
 }
 
 // streaming ZIP/XML iterator with nested ZIP support
@@ -121,10 +115,7 @@ impl<R: Read + Seek> ZipXmlIter<R> {
         let mut contents = String::new();
         entry.read_to_string(&mut contents)?;
 
-        Ok(FileData {
-            file_name: name,
-            contents,
-        })
+        Ok((name, contents))
     }
 
     fn build_nested_iterator(
@@ -200,8 +191,8 @@ mod tests {
         let result = read_xml_file(&path);
         assert!(result.is_ok());
         let file_data = result.unwrap();
-        assert!(!file_data.contents.is_empty());
-        assert!(file_data.contents.contains("<"));
+        assert!(!file_data.1.is_empty());
+        assert!(file_data.1.contains("<"));
     }
 
     #[test]
@@ -228,8 +219,8 @@ mod tests {
         let first_data = first_item.unwrap();
         assert!(first_data.is_ok());
         let first_data = first_data.unwrap();
-        assert_eq!(first_data.file_name, "46505-3411-1.xml");
-        assert!(!first_data.contents.is_empty());
+        assert_eq!(first_data.0, "46505-3411-1.xml");
+        assert!(!first_data.1.is_empty());
     }
 
     #[test]
@@ -244,10 +235,7 @@ mod tests {
             !items.is_empty(),
             "Expected at least one XML file in the zip"
         );
-        let names = items
-            .iter()
-            .map(|data| data.file_name.clone())
-            .collect::<Vec<_>>();
+        let names = items.iter().map(|data| data.0.clone()).collect::<Vec<_>>();
         assert_eq!(names[0], "46505-3411-1.xml");
     }
 
@@ -289,7 +277,7 @@ mod tests {
 
         assert!(results.len() >= 2);
         assert!(results[0].is_ok());
-        let buf = results[0].as_ref().unwrap().contents.to_string();
+        let buf = results[0].as_ref().unwrap().1.to_string();
         assert!(!buf.is_empty());
         let zip_results_ok = results.iter().skip(1).any(|r| r.is_ok());
         assert!(

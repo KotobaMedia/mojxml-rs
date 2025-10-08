@@ -19,6 +19,7 @@ geozero = "0.14"
 indicatif = "0.18"
 log = "0.4"
 mojxml-parser = { path = "../parser", features = ["geoparquet"] }
+mojxml-reader = { path = "../reader" }
 num_cpus = "1"
 serde = { workspace = true }
 serde_json = "1"
