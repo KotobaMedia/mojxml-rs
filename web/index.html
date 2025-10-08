@@ -102,6 +102,22 @@
                 解凍した .xml ファイルまたは .zip ファイルをここにドラッグ＆ドロップ、またはクリックして選択してください。
               </small>
             </div>
+            <div class="card-footer bg-transparent border-top">
+              <div
+                class="d-flex flex-column flex-md-row align-items-center justify-content-between gap-2"
+              >
+                <span class="small text-body-secondary text-center text-md-start">
+                  サンプルとして屋久島町2025年データを読み込むこともできます。
+                </span>
+                <button
+                  id="load-test-data"
+                  type="button"
+                  class="btn btn-outline-primary btn-sm align-self-center"
+                >
+                  屋久島町2025を読み込む
+                </button>
+              </div>
+            </div>
           </div>
           <input type="file" id="file-input" accept=".xml,text/xml,.zip" hidden />
           <section class="mb-4">
@@ -113,7 +129,32 @@
             </div>
           </section>
           <section>
-            <h2 class="h5 mb-3">プレビュー</h2>
+            <div
+              class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-2 mb-3"
+            >
+              <h2 class="h5 mb-0">プレビュー</h2>
+              <button
+                id="download-geojson"
+                type="button"
+                class="btn btn-primary btn-sm d-inline-flex align-items-center gap-2"
+                disabled
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M12 3a1 1 0 0 0-1 1v9.586l-2.293-2.293a1 1 0 1 0-1.414 1.414l4 4a1 1 0 0 0 1.414 0l4-4a1 1 0 0 0-1.414-1.414L13 13.586V4a1 1 0 0 0-1-1z"
+                  ></path>
+                  <path d="M5 18a1 1 0 0 0 0 2h14a1 1 0 0 0 0-2H5z"></path>
+                </svg>
+                <span>変換済み GeoJSON をダウンロードする</span>
+              </button>
+            </div>
             <div class="card shadow-sm overflow-hidden">
               <div id="map" role="region" aria-label="Parsed GeoJSON preview"></div>
             </div>

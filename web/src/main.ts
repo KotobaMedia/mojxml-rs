@@ -446,12 +446,65 @@ async function main() {
   const dropArea = document.getElementById("drop-area");
   const statusEl = document.getElementById("status");
   const fileInput = document.getElementById("file-input") as HTMLInputElement | null;
+  const downloadButton = document.getElementById(
+    "download-geojson",
+  ) as HTMLButtonElement | null;
+  const testDataButton = document.getElementById("load-test-data") as HTMLButtonElement | null;
   initMap();
 
   if (!dropArea || !statusEl || !fileInput) {
     console.error("Required UI elements are missing from the page.");
     return;
   }
+
+  let latestGeoJson: FeatureCollection | undefined;
+  let latestDownloadFileName = "converted.geojson";
+
+  const deriveGeoJsonFileName = (sourceName: string) => {
+    const sanitized = sourceName.trim().replace(/[/\\?%*:|"<>]/g, "_");
+    const baseName = sanitized.replace(/\.[^.]+$/, "") || "converted";
+    return `${baseName}.geojson`;
+  };
+
+  const resetGeoJsonDownload = () => {
+    latestGeoJson = undefined;
+    latestDownloadFileName = "converted.geojson";
+    if (downloadButton) {
+      downloadButton.disabled = true;
+    }
+  };
+
+  const prepareGeoJsonDownload = (collection: FeatureCollection, originName: string) => {
+    latestGeoJson = collection;
+    latestDownloadFileName = deriveGeoJsonFileName(originName);
+    if (downloadButton) {
+      downloadButton.disabled = false;
+    }
+  };
+
+  downloadButton?.addEventListener("click", () => {
+    if (!latestGeoJson) {
+      return;
+    }
+
+    try {
+      const blob = new Blob([JSON.stringify(latestGeoJson, null, 2)], {
+        type: "application/geo+json",
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = latestDownloadFileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      console.error("Failed to prepare GeoJSON download:", error);
+    }
+  });
+
+  resetGeoJsonDownload();
 
   const statusLines: string[] = [];
 
@@ -560,11 +613,13 @@ async function main() {
 
     if (collection) {
       updateMapWithGeoJson(collection);
+      prepareGeoJsonDownload(collection, originName);
     }
     appendStatus(message);
   };
 
   const handleFile = async (file: File) => {
+    resetGeoJsonDownload();
     resetStatus(`Reading ${file.name}...`);
     try {
       if (isZipFile(file)) {
@@ -587,6 +642,44 @@ async function main() {
       appendStatus(`Error processing ${file.name}: ${describeError(error)}`);
     }
   };
+
+  const loadTestData = async () => {
+    const testDataUrl = await import(`../../testdata/46505-3411-2025.zip?url`);
+    console.log("Test data URL:", testDataUrl);
+
+    if (!testDataButton) {
+      appendStatus("テストデータ読み込みボタンが見つかりません。");
+      return;
+    }
+
+    testDataButton.disabled = true;
+    const revertText = testDataButton.textContent;
+    testDataButton.textContent = "読み込み中...";
+
+    try {
+      resetStatus("テストデータをダウンロードしています...");
+      const response = await fetch(testDataUrl.default);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch test data (${response.status} ${response.statusText})`);
+      }
+
+      const blob = await response.blob();
+      const file = new File([blob], "46505-3411-2025.zip", { type: "application/zip" });
+      await handleFile(file);
+    } catch (error) {
+      console.error("Failed to load test data:", error);
+      appendStatus(`テストデータの読み込みに失敗しました: ${describeError(error)}`);
+    } finally {
+      testDataButton.disabled = false;
+      if (revertText !== null) {
+        testDataButton.textContent = revertText;
+      }
+    }
+  };
+
+  testDataButton?.addEventListener("click", () => {
+    void loadTestData();
+  });
 
   const preventDefaults = (event: Event) => {
     event.preventDefault();

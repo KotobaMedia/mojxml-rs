@@ -4,7 +4,7 @@ export default defineConfig({
   base: './',
   server: {
     fs: {
-      allow: ['.', '../crates/wasm/pkg'],
+      allow: ['.', '../crates/wasm/pkg', '../testdata'],
     }
   },
 });
