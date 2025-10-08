@@ -108,8 +108,8 @@
   <body>
     <main>
       <h1>地図XMLを mojxml-rs で読み込む</h1>
-      <div id="drop-area">解凍した地図XMLファイルをここにドラッグ＆ドロップするか、クリックして選択してください。</div>
-      <input type="file" id="file-input" accept=".xml,text/xml" hidden />
+      <div id="drop-area">地図XMLファイル(解凍した .xml ファイルまたは .zip ファイル) をここにドラッグ＆ドロップするか、クリックして選択してください。</div>
+      <input type="file" id="file-input" accept=".xml,text/xml,.zip" hidden />
       <pre id="status" aria-live="polite"></pre>
       <div id="map" role="region" aria-label="Parsed GeoJSON preview"></div>
     </main>

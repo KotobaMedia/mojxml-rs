@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@types/async": "^3.2.25",
     "@types/geojson": "^7946.0.16",
     "typescript": "~5.9.3",
     "vite": "^7.1.7"

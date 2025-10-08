@@ -1,3 +1,4 @@
+import { mapLimit } from "async";
 import maplibregl from "maplibre-gl";
 import type { FeatureCollection, GeoJsonProperties } from "geojson";
 import { unzip } from "fflate";
@@ -28,6 +29,7 @@ const POLYGON_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon`;
 const POLYGON_OUTLINE_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon-outline`;
 const POLYGON_LABEL_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon-label`;
 const BASE_STYLE_URL = "https://tiles.kmproj.com/styles/osm-ja-light.json";
+const PARSER_WORKER_CONCURRENCY = 4;
 
 class FeatureInfoControl implements maplibregl.IControl {
   private container: HTMLDivElement | undefined;
@@ -350,8 +352,10 @@ const parseXmlDocumentsWithWorker = async (
     onFailure?: (failed: FailedDocument) => void;
   },
 ) => {
-  const settled = await Promise.all(
-    entries.map(async (entry) => {
+  const settled = await mapLimit(
+    entries,
+    PARSER_WORKER_CONCURRENCY,
+    async (entry: XmlDocument): Promise<ParsedDocument | FailedDocument> => {
       console.log("starting parse", entry.fileName);
       try {
         const result = await parseXmlWithWorker(entry.fileName, entry.xml);
@@ -363,7 +367,7 @@ const parseXmlDocumentsWithWorker = async (
         callbacks?.onFailure?.(failure);
         return failure;
       }
-    }),
+    },
   );
 
   const successes: ParsedDocument[] = [];
