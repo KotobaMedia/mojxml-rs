@@ -81,8 +81,12 @@
         <div class="col-lg-10 col-xl-8">
           <header class="text-center mb-4">
             <h1 class="display-6 mb-3">地図XMLを mojxml-rs で読み込む</h1>
-            <p class="text-body-secondary mb-0">
-              地図XMLファイルをドロップ、またはクリックして選択し、mojxml-rs の Web 版で簡単にプレビューできます。
+            <p class="text-center text-body-secondary mt-4 mb-0">
+              このツールは、
+              <a href="https://github.com/KotobaMedia/mojxml-rs" class="link-primary"
+                ><code>KotobaMedia/mojxml-rs</code></a
+              >
+              を使って地図XMLの変換を行っております。 mojxml-rs は通常インストールするとローカルのコマンドラインツールとして使用できますが、 Web 版は WebAssembly を利用して同じ挙動をブラウザ上で実現しています。
             </p>
           </header>
           <div class="card shadow-sm mb-4">
@@ -95,7 +99,7 @@
             >
               <span class="fw-semibold">地図XMLファイルをここにドラッグ＆ドロップ</span>
               <small id="drop-area-help" class="text-body-secondary">
-                解凍した .xml ファイルまたは .zip ファイルを使用できます。クリックしてファイルを選択することもできます。
+                解凍した .xml ファイルまたは .zip ファイルをここにドラッグ＆ドロップ、またはクリックして選択してください。
               </small>
             </div>
           </div>
@@ -114,13 +118,6 @@
               <div id="map" role="region" aria-label="Parsed GeoJSON preview"></div>
             </div>
           </section>
-          <p class="text-center text-body-secondary mt-4 mb-0">
-            このツールは、
-            <a href="https://github.com/KotobaMedia/mojxml-rs" class="link-primary"
-              ><code>KotobaMedia/mojxml-rs</code></a
-            >
-            を使って地図XMLの変換を行っております。
-          </p>
           <p class="text-center text-body-secondary mt-4 mb-0">
             © 2025 <a href="https://kotobamedia.com" class="link-primary">KotobaMedia</a>
           </p>

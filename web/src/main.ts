@@ -6,23 +6,17 @@ import "bootstrap/dist/css/bootstrap.min.css";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 type WorkerSuccessMessage = {
-  id: number;
   status: "success";
   result: FeatureCollection;
   elapsedMs: number;
 };
 
 type WorkerErrorMessage = {
-  id: number;
   status: "error";
   message: string;
 };
 
 type WorkerMessage = WorkerSuccessMessage | WorkerErrorMessage;
-
-const parserWorker = new Worker(new URL("./parserWorker.ts", import.meta.url), {
-  type: "module",
-});
 
 const MAP_CONTAINER_ID = "map";
 const GEOJSON_SOURCE_ID = "parsed-geojson";
@@ -30,7 +24,65 @@ const POLYGON_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon`;
 const POLYGON_OUTLINE_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon-outline`;
 const POLYGON_LABEL_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon-label`;
 const BASE_STYLE_URL = "https://tiles.kmproj.com/styles/osm-ja-light.json";
-const PARSER_WORKER_CONCURRENCY = 4;
+const PARSER_WORKER_CONCURRENCY = navigator.hardwareConcurrency || 2;
+
+class ParserWorkerPool {
+  private idleWorkers: Worker[] = [];
+  private pendingResolvers: Array<(worker: Worker) => void> = [];
+  private totalWorkers = 0;
+  private readonly maxSize: number;
+
+  constructor() {
+    this.maxSize = PARSER_WORKER_CONCURRENCY;
+  }
+
+  acquire(): Promise<Worker> {
+    const idleWorker = this.idleWorkers.pop();
+    if (idleWorker) {
+      return Promise.resolve(idleWorker);
+    }
+
+    if (this.totalWorkers < this.maxSize) {
+      this.totalWorkers += 1;
+      return Promise.resolve(this.createWorker());
+    }
+
+    return new Promise<Worker>((resolve) => {
+      this.pendingResolvers.push(resolve);
+    });
+  }
+
+  release(worker: Worker) {
+    const pending = this.pendingResolvers.shift();
+    if (pending) {
+      pending(worker);
+      return;
+    }
+
+    this.idleWorkers.push(worker);
+  }
+
+  invalidate(worker: Worker) {
+    worker.terminate();
+    this.totalWorkers = Math.max(0, this.totalWorkers - 1);
+
+    const pending = this.pendingResolvers.shift();
+    if (!pending) {
+      return;
+    }
+
+    this.totalWorkers += 1;
+    pending(this.createWorker());
+  }
+
+  private createWorker() {
+    return new Worker(new URL("./parserWorker.ts", import.meta.url), {
+      type: "module",
+    });
+  }
+}
+
+const parserWorkerPool = new ParserWorkerPool();
 
 class FeatureInfoControl implements maplibregl.IControl {
   private container: HTMLDivElement | undefined;
@@ -197,7 +249,6 @@ function registerHoverInteraction(map: maplibregl.Map, layerId: string) {
   });
 }
 
-let nextWorkerRequestId = 0;
 let mapInstance: maplibregl.Map | undefined;
 
 type XmlDocument = {
@@ -266,6 +317,7 @@ const unzipToObject = (data: Uint8Array) =>
 async function extractXmlDocumentsFromZip(
   bytes: Uint8Array,
   originPath: string,
+  log?: (message: string) => void,
 ): Promise<XmlDocument[]> {
   const xmlDocuments: XmlDocument[] = [];
   let entries: Record<string, Uint8Array>;
@@ -288,7 +340,7 @@ async function extractXmlDocumentsFromZip(
 
     if (lowerName.endsWith(ZIP_EXTENSION)) {
       try {
-        const nestedDocuments = await extractXmlDocumentsFromZip(content, fullPath);
+        const nestedDocuments = await extractXmlDocumentsFromZip(content, fullPath, log);
         xmlDocuments.push(...nestedDocuments);
       } catch (error) {
         console.error(`Failed to process nested archive ${fullPath}:`, error);
@@ -299,6 +351,7 @@ async function extractXmlDocumentsFromZip(
     if (lowerName.endsWith(XML_EXTENSION)) {
       try {
         const xml = textDecoder.decode(content);
+        log?.(`unzipped ${fullPath}`);
         xmlDocuments.push({ fileName: fullPath, xml });
       } catch (error) {
         console.error(`Failed to decode XML document ${fullPath}:`, error);
@@ -309,30 +362,32 @@ async function extractXmlDocumentsFromZip(
   return xmlDocuments;
 }
 
-const parseXmlWithWorker = (fileName: string, xml: string) =>
-  new Promise<WorkerSuccessMessage>((resolve, reject) => {
-    const requestId = nextWorkerRequestId++;
+const parseXmlWithWorker = async (
+  fileName: string,
+  xml: string,
+): Promise<WorkerSuccessMessage> => {
+  const parserWorker = await parserWorkerPool.acquire();
 
+  return new Promise<WorkerSuccessMessage>((resolve, reject) => {
     const cleanup = () => {
       parserWorker.removeEventListener("message", handleMessage);
       parserWorker.removeEventListener("error", handleError);
     };
 
     const handleMessage = (event: MessageEvent<WorkerMessage>) => {
-      if (event.data.id !== requestId) {
-        return;
-      }
-
       cleanup();
       if (event.data.status === "success") {
+        parserWorkerPool.release(parserWorker);
         resolve(event.data);
       } else {
+        parserWorkerPool.release(parserWorker);
         reject(new Error(event.data.message));
       }
     };
 
     const handleError = (event: ErrorEvent) => {
       cleanup();
+      parserWorkerPool.invalidate(parserWorker);
       reject(event.error ?? new Error(event.message));
     };
 
@@ -340,11 +395,11 @@ const parseXmlWithWorker = (fileName: string, xml: string) =>
     parserWorker.addEventListener("error", handleError);
 
     parserWorker.postMessage({
-      id: requestId,
       fileName,
       xml,
     });
   });
+};
 
 const parseXmlDocumentsWithWorker = async (
   entries: XmlDocument[],
@@ -353,6 +408,7 @@ const parseXmlDocumentsWithWorker = async (
     onFailure?: (failed: FailedDocument) => void;
   },
 ) => {
+  const startTime = performance.now();
   const settled = await mapLimit(
     entries,
     PARSER_WORKER_CONCURRENCY,
@@ -371,6 +427,7 @@ const parseXmlDocumentsWithWorker = async (
     },
   );
 
+  const totalElapsedMs = performance.now() - startTime;
   const successes: ParsedDocument[] = [];
   const failures: FailedDocument[] = [];
 
@@ -382,7 +439,7 @@ const parseXmlDocumentsWithWorker = async (
     }
   }
 
-  return { successes, failures };
+  return { successes, failures, totalElapsedMs };
 };
 
 async function main() {
@@ -423,8 +480,11 @@ async function main() {
     renderStatus();
   };
 
-  const summarizeResults = (successes: ParsedDocument[], failures: FailedDocument[]) => {
-    const totalElapsedMs = successes.reduce((sum, item) => sum + item.result.elapsedMs, 0);
+  const summarizeResults = (
+    successes: ParsedDocument[],
+    failures: FailedDocument[],
+    totalElapsedMs: number,
+  ) => {
     const totalFeatures = successes.reduce(
       (sum, item) => sum + item.result.result.features.length,
       0,
@@ -454,7 +514,7 @@ async function main() {
     ];
 
     if (totalElapsedMs > 0) {
-      summaryParts.push(`Worker time ${totalElapsedMs.toFixed(2)} ms`);
+      summaryParts.push(`Elapsed ${totalElapsedMs.toFixed(2)} ms`);
     }
 
     if (failures.length > 0) {
@@ -480,20 +540,23 @@ async function main() {
       `Parsing ${documents.length} XML file${documents.length === 1 ? "" : "s"} from ${originName}...`,
     );
 
-    const { successes, failures } = await parseXmlDocumentsWithWorker(documents, {
-      onSuccess: (parsed) => {
-        const featureCount = parsed.result.result.features.length;
-        appendStatus(
-          `Processed ${parsed.entry.fileName}: ${featureCount} feature${
-            featureCount === 1 ? "" : "s"
-          } in ${parsed.result.elapsedMs.toFixed(2)} ms`,
-        );
+    const { successes, failures, totalElapsedMs } = await parseXmlDocumentsWithWorker(
+      documents,
+      {
+        onSuccess: (parsed) => {
+          const featureCount = parsed.result.result.features.length;
+          appendStatus(
+            `Processed ${parsed.entry.fileName}: ${featureCount} feature${
+              featureCount === 1 ? "" : "s"
+            } in ${parsed.result.elapsedMs.toFixed(2)} ms`,
+          );
+        },
+        onFailure: (failed) => {
+          appendStatus(`Failed ${failed.entry.fileName}: ${describeError(failed.error)}`);
+        },
       },
-      onFailure: (failed) => {
-        appendStatus(`Failed ${failed.entry.fileName}: ${describeError(failed.error)}`);
-      },
-    });
-    const { message, collection } = summarizeResults(successes, failures);
+    );
+    const { message, collection } = summarizeResults(successes, failures, totalElapsedMs);
 
     if (collection) {
       updateMapWithGeoJson(collection);
@@ -506,10 +569,11 @@ async function main() {
     try {
       if (isZipFile(file)) {
         const arrayBuffer = await file.arrayBuffer();
-        replaceLastStatus(`Read ${file.name} (${arrayBuffer.byteLength} bytes).`);
+        replaceLastStatus(`Read ${file.name} (${arrayBuffer.byteLength} bytes); extracting...`);
         const documents = await extractXmlDocumentsFromZip(
           new Uint8Array(arrayBuffer),
           file.name,
+          appendStatus,
         );
         await handleXmlDocuments(documents, file.name);
         return;

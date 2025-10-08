@@ -6,20 +6,17 @@ import type { FeatureCollection } from "geojson";
 declare const self: DedicatedWorkerGlobalScope;
 
 type ParseRequest = {
-  id: number;
   fileName: string;
   xml: string;
 };
 
 type ParseSuccessResponse = {
-  id: number;
   status: "success";
   result: FeatureCollection;
   elapsedMs: number;
 };
 
 type ParseErrorResponse = {
-  id: number;
   status: "error";
   message: string;
 };
@@ -36,7 +33,7 @@ const ensureInit = () => {
 };
 
 self.addEventListener("message", async (event: MessageEvent<ParseRequest>) => {
-  const { id, fileName, xml } = event.data;
+  const { fileName, xml } = event.data;
   await ensureInit();
 
   try {
@@ -44,7 +41,6 @@ self.addEventListener("message", async (event: MessageEvent<ParseRequest>) => {
     const result = parse_xml_content(fileName, xml);
     const elapsedMs = performance.now() - start;
     const response: ParseResponse = {
-      id,
       status: "success",
       result: JSON.parse(result) as FeatureCollection,
       elapsedMs,
@@ -58,7 +54,6 @@ self.addEventListener("message", async (event: MessageEvent<ParseRequest>) => {
         ? error
         : JSON.stringify(error);
     const response: ParseResponse = {
-      id,
       status: "error",
       message,
     };
