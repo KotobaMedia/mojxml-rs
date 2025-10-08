@@ -112,8 +112,7 @@ pub fn process_files(
         handles.push(thread::spawn(move || {
             while let Ok((file_name, xml_content)) = parser_rx.recv() {
                 info!("[XML {:>2}] Parsing file: {}", i, file_name);
-                let parsed_xml =
-                    parse_xml_content(&file_name, &xml_content, &options);
+                let parsed_xml = parse_xml_content(&file_name, &xml_content, &options);
                 match parsed_xml {
                     Ok(parsed) => {
                         info!("[XML {:>2}] Parsed file: {}", i, file_name);
