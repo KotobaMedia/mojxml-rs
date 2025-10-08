@@ -16,13 +16,14 @@ fn has_tag(node: &Node, namespace: Option<&str>, name: &str) -> bool {
     node.tag_name().name() == name && node.tag_name().namespace() == namespace
 }
 
-fn required_attribute(node: &Node, attr: &str) -> Result<String> {
-    node.attribute(attr)
-        .map(|value| value.to_string())
-        .ok_or_else(|| Error::MissingAttribute {
-            element: node.tag_name().name().to_string(),
-            attribute: attr.to_string(),
-        })
+fn required_attribute<'a, 'd>(node: &Node<'a, 'd>, attr: &str) -> Result<&'a str>
+where
+    'd: 'a,
+{
+    node.attribute(attr).ok_or_else(|| Error::MissingAttribute {
+        element: node.tag_name().name().to_string(),
+        attribute: attr.to_string(),
+    })
 }
 
 fn node_text(node: &Node, label: &str) -> Result<String> {
@@ -60,11 +61,14 @@ fn parse_xy(node: &Node) -> Result<(f64, f64)> {
     Ok((x, y))
 }
 
-fn collect_ring_points(
-    boundary: &Node,
-    curves: &HashMap<String, Curve>,
+fn collect_ring_points<'a, 'd>(
+    boundary: &Node<'a, 'd>,
+    curves: &HashMap<&'a str, Curve>,
     zmn_ns: Option<&str>,
-) -> Result<Vec<Point>> {
+) -> Result<Vec<Point>>
+where
+    'd: 'a,
+{
     let mut ring_points = Vec::new();
 
     for ring in boundary
@@ -74,8 +78,8 @@ fn collect_ring_points(
         for curve_ref in ring.children().filter(|child| child.is_element()) {
             let idref = required_attribute(&curve_ref, "idref")?;
             let curve = curves
-                .get(idref.as_str())
-                .ok_or_else(|| Error::PointNotFound(idref.clone()))?;
+                .get(idref)
+                .ok_or_else(|| Error::PointNotFound(idref.to_string()))?;
             ring_points.push(*curve);
         }
     }
@@ -87,17 +91,18 @@ fn parse_constituent_fude(node: &Node) -> 筆界未定構成筆 {
     let mut constituent = 筆界未定構成筆::default();
 
     for entry in node.children().filter(|child| child.is_element()) {
-        let value = entry.text().unwrap_or("").to_string();
-        match entry.tag_name().name() {
-            "大字コード" => constituent.大字コード = value,
-            "丁目コード" => constituent.丁目コード = value,
-            "小字コード" => constituent.小字コード = value,
-            "予備コード" => constituent.予備コード = value,
-            "大字名" => constituent.大字名 = Some(value),
-            "丁目名" => constituent.丁目名 = Some(value),
-            "小字名" => constituent.小字名 = Some(value),
-            "予備名" => constituent.予備名 = Some(value),
-            "地番" => constituent.地番 = value,
+        let tag_name = entry.tag_name().name();
+        let text = entry.text();
+        match tag_name {
+            "大字コード" => constituent.大字コード = text.unwrap_or("").to_owned(),
+            "丁目コード" => constituent.丁目コード = text.unwrap_or("").to_owned(),
+            "小字コード" => constituent.小字コード = text.unwrap_or("").to_owned(),
+            "予備コード" => constituent.予備コード = text.unwrap_or("").to_owned(),
+            "大字名" => constituent.大字名 = text.map(str::to_owned),
+            "丁目名" => constituent.丁目名 = text.map(str::to_owned),
+            "小字名" => constituent.小字名 = text.map(str::to_owned),
+            "予備名" => constituent.予備名 = text.map(str::to_owned),
+            "地番" => constituent.地番 = text.unwrap_or("").to_owned(),
             _ => {}
         }
     }
@@ -117,14 +122,20 @@ pub struct ParseOptions {
 }
 
 // --- Helper Functions ---
-fn get_child_element<'a>(node: &'a Node<'a, 'a>, name: &str) -> Result<Node<'a, 'a>> {
+fn get_child_element<'a, 'd>(node: &Node<'a, 'd>, name: &str) -> Result<Node<'a, 'd>>
+where
+    'd: 'a,
+{
     node.children()
         .find(|child| child.tag_name().name() == name)
         .ok_or_else(|| Error::MissingElement(name.to_string()))
 }
 
 // -- Accessory parsing functions --
-fn parse_points(spatial_element: &Node) -> Result<HashMap<String, Point>> {
+fn parse_points<'a, 'd>(spatial_element: &Node<'a, 'd>) -> Result<HashMap<&'a str, Point>>
+where
+    'd: 'a,
+{
     let mut points = HashMap::new();
     let zmn_ns = get_xml_namespace(Some("zmn"));
 
@@ -144,10 +155,13 @@ fn parse_points(spatial_element: &Node) -> Result<HashMap<String, Point>> {
     Ok(points)
 }
 
-fn parse_curves(
-    spatial_element: &Node,
-    points: &HashMap<String, Point>,
-) -> Result<HashMap<String, Curve>> {
+fn parse_curves<'a, 'd>(
+    spatial_element: &Node<'a, 'd>,
+    points: &HashMap<&'a str, Point>,
+) -> Result<HashMap<&'a str, Curve>>
+where
+    'd: 'a,
+{
     let mut curves = HashMap::new();
     let zmn_ns = get_xml_namespace(Some("zmn"));
 
@@ -178,8 +192,8 @@ fn parse_curves(
                     .ok_or_else(|| Error::MissingElement("GM_Position.indirect".to_string()))?;
                 let idref = required_attribute(&reference, "idref")?;
                 let point = points
-                    .get(idref.as_str())
-                    .ok_or_else(|| Error::PointNotFound(idref.clone()))?;
+                    .get(idref)
+                    .ok_or_else(|| Error::PointNotFound(idref.to_string()))?;
                 (point.x(), point.y())
             }
             "GM_Position.direct" => parse_xy(&position)?,
@@ -192,8 +206,8 @@ fn parse_curves(
     Ok(curves)
 }
 
-fn transform_curves_crs(
-    curves: &mut HashMap<String, Curve>,
+fn transform_curves_crs<'a>(
+    curves: &mut HashMap<&'a str, Curve>,
     source_crs: &Proj,
     target_crs: &Proj,
 ) -> Result<()> {
@@ -202,7 +216,7 @@ fn transform_curves_crs(
     }
 
     for curve in curves.values_mut() {
-        let mut point = (curve.x(), curve.y());
+        let mut point = curve.x_y();
         proj4rs::transform::transform(source_crs, target_crs, &mut point)?;
         *curve = Point::new(point.0.to_degrees(), point.1.to_degrees());
     }
@@ -210,10 +224,13 @@ fn transform_curves_crs(
     Ok(())
 }
 
-fn parse_surfaces(
-    spatial_element: &Node,
-    curves: &HashMap<String, Curve>,
-) -> Result<HashMap<String, Surface>> {
+fn parse_surfaces<'a, 'd>(
+    spatial_element: &Node<'a, 'd>,
+    curves: &HashMap<&'a str, Curve>,
+) -> Result<HashMap<&'a str, Surface>>
+where
+    'd: 'a,
+{
     let mut surfaces = HashMap::new();
     let zmn_ns = get_xml_namespace(Some("zmn"));
 
@@ -257,11 +274,14 @@ fn parse_surfaces(
     Ok(surfaces)
 }
 
-fn parse_features(
-    subject_elem: &Node,
-    surfaces: &HashMap<String, Surface>,
+fn parse_features<'a, 'd>(
+    subject_elem: &Node<'a, 'd>,
+    surfaces: &HashMap<&'a str, Surface>,
     options: &ParseOptions,
-) -> Result<Vec<Feature>> {
+) -> Result<Vec<Feature>>
+where
+    'd: 'a,
+{
     let mut features: Vec<Feature> = Vec::new();
     let default_ns = get_xml_namespace(None);
 
@@ -286,23 +306,23 @@ fn parse_features(
         let mut 筆界未定構成筆 = Vec::new();
 
         for entry in fude.children().filter(|child| child.is_element()) {
-            let value = entry.text().unwrap_or("").to_string();
-            match entry.tag_name().name() {
+            let tag_name = entry.tag_name().name();
+            match tag_name {
                 "形状" => {
                     let idref = required_attribute(&entry, "idref")?;
-                    geometry = surfaces.get(idref.as_str()).cloned();
+                    geometry = surfaces.get(idref).cloned();
                 }
-                "精度区分" => 精度区分 = Some(value),
-                "大字コード" => 大字コード = Some(value),
-                "丁目コード" => 丁目コード = Some(value),
-                "小字コード" => 小字コード = Some(value),
-                "予備コード" => 予備コード = Some(value),
-                "大字名" => 大字名 = Some(value),
-                "丁目名" => 丁目名 = Some(value),
-                "小字名" => 小字名 = Some(value),
-                "予備名" => 予備名 = Some(value),
-                "地番" => 地番 = Some(value),
-                "座標値種別" => 座標値種別 = Some(value),
+                "精度区分" => 精度区分 = entry.text().map(str::to_owned),
+                "大字コード" => 大字コード = Some(entry.text().unwrap_or("").to_owned()),
+                "丁目コード" => 丁目コード = Some(entry.text().unwrap_or("").to_owned()),
+                "小字コード" => 小字コード = Some(entry.text().unwrap_or("").to_owned()),
+                "予備コード" => 予備コード = Some(entry.text().unwrap_or("").to_owned()),
+                "大字名" => 大字名 = entry.text().map(str::to_owned),
+                "丁目名" => 丁目名 = entry.text().map(str::to_owned),
+                "小字名" => 小字名 = entry.text().map(str::to_owned),
+                "予備名" => 予備名 = entry.text().map(str::to_owned),
+                "地番" => 地番 = Some(entry.text().unwrap_or("").to_owned()),
+                "座標値種別" => 座標値種別 = entry.text().map(str::to_owned),
                 "筆界未定構成筆" => 筆界未定構成筆.push(parse_constituent_fude(&entry)),
                 _ => {}
             }
@@ -331,7 +351,7 @@ fn parse_features(
         features.push(Feature {
             geometry,
             props: FeatureProperties {
-                筆id: fude_id,
+                筆id: fude_id.to_owned(),
                 精度区分,
                 大字コード,
                 丁目コード,
@@ -397,7 +417,7 @@ pub fn parse_xml_content(
     let mut curves = parse_curves(&spatial_element, &points)?;
     if let Some(crs) = crs {
         let tgt_crs = get_proj("WGS84")?.expect("WGS84 CRS not found");
-        transform_curves_crs(&mut curves, &crs, &tgt_crs)?;
+        transform_curves_crs(&mut curves, crs, tgt_crs)?;
     }
 
     let surfaces = parse_surfaces(&spatial_element, &curves)?;
@@ -414,8 +434,10 @@ pub fn parse_xml_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::get_proj;
     use geo::{Area, BooleanOps};
     use geo_types::wkt;
+    use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
 
@@ -426,6 +448,47 @@ mod tests {
             .and_then(|p| p.parent())
             .expect("workspace root")
             .join("testdata")
+    }
+
+    #[test]
+    fn test_transform_curves_crs_public_coords_to_wgs84() {
+        let source_crs = get_proj("公共座標1系")
+            .expect("failed to load source CRS")
+            .expect("公共座標1系 should resolve to a proj definition");
+        let target_crs = get_proj("WGS84")
+            .expect("failed to load target CRS")
+            .expect("WGS84 should resolve to a proj definition");
+
+        let mut curves: HashMap<&str, Curve> = HashMap::from([
+            ("curve-1", Point::new(0.0, 0.0)),
+            ("curve-2", Point::new(-1000.0, -1000.0)),
+            ("curve-3", Point::new(1000.0, 1000.0)),
+        ]);
+
+        let expected_results: HashMap<&str, Curve> = HashMap::from([
+            ("curve-1", Point::new(129.5, 33.0)),
+            ("curve-2", Point::new(129.48929948, 32.99098186)),
+            ("curve-3", Point::new(129.5107027, 33.00901721)),
+        ]);
+
+        transform_curves_crs(&mut curves, source_crs, target_crs)
+            .expect("curve transformation should succeed");
+
+        for (id, expected_point) in expected_results {
+            let curve = curves.get(id).expect("transformed curve missing");
+            assert!(
+                (curve.x() - expected_point.x()).abs() < 1e-7,
+                "longitude mismatch for {id} ({} vs {} )",
+                curve.x(),
+                expected_point.x()
+            );
+            assert!(
+                (curve.y() - expected_point.y()).abs() < 1e-7,
+                "latitude mismatch for {id} ({} vs {} )",
+                curve.y(),
+                expected_point.y()
+            );
+        }
     }
 
     #[test]

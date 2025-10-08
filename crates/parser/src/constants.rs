@@ -1,5 +1,7 @@
 use crate::error::{Error, Result};
 use proj4rs::proj::Proj;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 static PROJ_STRS: &[(&str, &str); 20] = &[
     ("WGS84", "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"),
@@ -81,17 +83,33 @@ static PROJ_STRS: &[(&str, &str); 20] = &[
     ),
 ];
 
-pub fn get_proj(name: &str) -> Result<Option<Proj>> {
+static PROJ_CACHE: OnceLock<HashMap<&'static str, OnceLock<Proj>>> = OnceLock::new();
+
+pub fn get_proj(name: &str) -> Result<Option<&'static Proj>> {
     if name == "任意座標系" {
         return Ok(None);
     }
-    let str = PROJ_STRS
+    let definition = PROJ_STRS
         .iter()
-        .find(|(n, _)| n == &name)
-        .map(|(_, s)| s)
+        .find(|(n, _)| *n == name)
+        .map(|(_, s)| *s)
         .ok_or_else(|| Error::UnsupportedCrs(name.to_string()))?;
-    // We can unwrap here because if the string is in the array, it is valid
-    let proj = Proj::from_proj_string(str).unwrap();
+
+    let cache = PROJ_CACHE.get_or_init(|| {
+        let mut map = HashMap::with_capacity(PROJ_STRS.len());
+        for (name, _) in PROJ_STRS.iter() {
+            map.insert(*name, OnceLock::new());
+        }
+        map
+    });
+
+    let cell = cache
+        .get(name)
+        .ok_or_else(|| Error::UnsupportedCrs(name.to_string()))?;
+    let proj = cell.get_or_init(|| {
+        Proj::from_proj_string(definition)
+            .unwrap_or_else(|err| panic!("invalid PROJ definition for {name}: {err:?}"))
+    });
     Ok(Some(proj))
 }
 
@@ -105,4 +123,37 @@ pub fn get_xml_namespace(prefix: Option<&str>) -> Option<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::get_proj;
+    use std::ptr;
+
+    #[test]
+    fn proj_cache_test() {
+        let wgs84 = get_proj("WGS84")
+            .expect("WGS84 lookup should succeed")
+            .expect("WGS84 should not map to None");
+        let wgs84_cached = get_proj("WGS84")
+            .expect("WGS84 cached lookup should succeed")
+            .expect("WGS84 cached lookup should not map to None");
+        assert!(
+            ptr::eq(wgs84, wgs84_cached),
+            "WGS84 should return the same cached Proj instance"
+        );
+
+        let public_zone_1 = get_proj("公共座標1系")
+            .expect("公共座標1系 lookup should succeed")
+            .expect("公共座標1系 should not map to None");
+        let public_zone_1_cached = get_proj("公共座標1系")
+            .expect("公共座標1系 cached lookup should succeed")
+            .expect("公共座標1系 cached lookup should not map to None");
+        assert!(
+            ptr::eq(public_zone_1, public_zone_1_cached),
+            "公共座標1系 should return the same cached Proj instance"
+        );
+
+        assert!(
+            !ptr::eq(wgs84, public_zone_1),
+            "Distinct CRS names should resolve to distinct Proj instances"
+        );
+    }
+}
