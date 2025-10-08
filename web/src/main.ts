@@ -2,6 +2,7 @@ import { mapLimit } from "async";
 import maplibregl from "maplibre-gl";
 import type { FeatureCollection, GeoJsonProperties } from "geojson";
 import { unzip } from "fflate";
+import "bootstrap/dist/css/bootstrap.min.css";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 type WorkerSuccessMessage = {
@@ -598,6 +599,13 @@ async function main() {
 
   dropArea.addEventListener("click", () => {
     fileInput.click();
+  });
+
+  dropArea.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      fileInput.click();
+    }
   });
 
   fileInput.addEventListener("change", () => {

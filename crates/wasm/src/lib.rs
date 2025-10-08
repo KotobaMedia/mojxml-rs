@@ -8,34 +8,40 @@ pub fn parse_xml_content(file_name: &str, xml_content: &str) -> Result<String, J
         include_chikugai: false,
     };
     let parsed = mojxml_parser::parse_xml_content(file_name, xml_content, &parse_options);
-    match parsed {
-        Ok(parsed) => {
-            let geojson = geojson::FeatureCollection {
-                features: parsed
-                    .features
-                    .into_iter()
-                    .map(|f| {
-                        let properties = serde_json::to_value(&f.props)
-                            .expect("Failed to serialize properties")
-                            .as_object()
-                            .cloned();
-                        geojson::Feature {
-                            bbox: None,
-                            geometry: Some((&f.geometry).into()),
-                            id: None,
-                            properties,
-                            foreign_members: None,
-                        }
-                    })
-                    .collect(),
-                bbox: None,
-                foreign_members: None,
-            };
-            Ok(serde_json::to_string(&geojson).unwrap())
-        }
-        Err(e) => {
-            // console::error_1(&JsValue::from_str(&format!("Error: {:?}", e)));
-            Err(format!("Error: {:?}", e).into())
-        }
+    let parsed = match parsed {
+        Ok(parsed) => parsed,
+        Err(e) => return Err(format!("Error: {:?}", e).into()),
+    };
+
+    let mut features = Vec::with_capacity(parsed.features.len());
+    for feature in parsed.features {
+        let mojxml_parser::Feature { geometry, props } = feature;
+
+        let properties = match serde_json::to_value(props) {
+            Ok(serde_json::Value::Object(map)) => Some(map),
+            Ok(_) => None,
+            Err(err) => {
+                return Err(JsValue::from_str(&format!(
+                    "Failed to serialize feature properties: {err}"
+                )))
+            }
+        };
+
+        features.push(geojson::Feature {
+            bbox: None,
+            geometry: Some((&geometry).into()),
+            id: None,
+            properties,
+            foreign_members: None,
+        });
     }
+
+    let geojson = geojson::FeatureCollection {
+        features,
+        bbox: None,
+        foreign_members: None,
+    };
+
+    serde_json::to_string(&geojson)
+        .map_err(|err| JsValue::from_str(&format!("Error serializing GeoJSON: {err}")))
 }

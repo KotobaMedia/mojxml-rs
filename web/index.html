@@ -9,71 +9,54 @@
         color-scheme: light dark;
       }
       body {
-        font-family: system-ui, sans-serif;
-        margin: 0;
-        padding: 2rem;
-        background: #f5f5f5;
-        color: #222;
+        min-height: 100vh;
       }
-      main {
-        max-width: 960px;
-        margin: 0 auto;
-      }
-      h1 {
-        font-size: 1.5rem;
-      }
-      #drop-area {
-        border: 2px dashed #888;
-        border-radius: 8px;
+      .drop-zone {
+        border: 2px dashed var(--bs-border-color);
+        border-radius: var(--bs-border-radius-lg);
         padding: 3rem 1rem;
-        text-align: center;
-        background: #fff;
-        transition: border-color 0.2s ease, background-color 0.2s ease;
+        background-color: var(--bs-body-bg);
+        transition:
+          border-color 0.2s ease,
+          background-color 0.2s ease,
+          box-shadow 0.2s ease;
         cursor: pointer;
       }
-      #drop-area.highlight {
-        border-color: #0a66ff;
-        background-color: #eef3ff;
+      .drop-zone.highlight {
+        border-color: var(--bs-primary);
+        background-color: rgba(var(--bs-primary-rgb), 0.08);
+        box-shadow: 0 0 0 0.25rem rgba(var(--bs-primary-rgb), 0.15);
       }
       #status {
-        margin-top: 1rem;
-        padding: 1rem;
-        background: #fff;
-        border-radius: 6px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+        min-height: 5rem;
+        max-height: 12rem;
+        overflow-y: auto;
         white-space: pre-wrap;
         word-break: break-word;
-        min-height: 3rem;
-        max-height: 3rem;
-        overflow-y: auto;
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        font-family: var(--bs-font-monospace);
       }
       #map {
         height: 480px;
-        margin-top: 1.5rem;
-        border-radius: 8px;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-        overflow: hidden;
-        background: #dcdcdc;
       }
       .feature-info-control {
         max-width: 320px;
         max-height: 200px;
         overflow: auto;
-        padding: 0.5rem;
+        padding: 0.75rem;
         font-size: 0.875rem;
         line-height: 1.4;
-        background: rgba(255, 255, 255, 0.95);
-        color: #222;
-        border-radius: 4px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+        background-color: var(--bs-body-bg);
+        color: var(--bs-body-color);
+        border-radius: var(--bs-border-radius);
+        border: 1px solid var(--bs-border-color);
+        box-shadow: var(--bs-box-shadow-sm);
       }
       .feature-info-control table {
         width: 100%;
         border-collapse: collapse;
       }
       .feature-info-control tr:nth-child(odd) {
-        background: rgba(9, 30, 66, 0.05);
+        background-color: rgba(var(--bs-primary-rgb), 0.05);
       }
       .feature-info-key,
       .feature-info-value {
@@ -88,30 +71,61 @@
       }
       .feature-info-empty {
         padding: 0.25rem 0;
-        color: #555;
-      }
-      @media (prefers-color-scheme: dark) {
-        .feature-info-control {
-          background: rgba(28, 28, 28, 0.9);
-          color: #f0f0f0;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-        }
-        .feature-info-control tr:nth-child(odd) {
-          background: rgba(240, 240, 240, 0.08);
-        }
-        .feature-info-empty {
-          color: #bbb;
-        }
+        color: var(--bs-secondary-color);
       }
     </style>
   </head>
-  <body>
-    <main>
-      <h1>地図XMLを mojxml-rs で読み込む</h1>
-      <div id="drop-area">地図XMLファイル(解凍した .xml ファイルまたは .zip ファイル) をここにドラッグ＆ドロップするか、クリックして選択してください。</div>
-      <input type="file" id="file-input" accept=".xml,text/xml,.zip" hidden />
-      <pre id="status" aria-live="polite"></pre>
-      <div id="map" role="region" aria-label="Parsed GeoJSON preview"></div>
+  <body class="bg-body-tertiary">
+    <main class="container py-5">
+      <div class="row justify-content-center">
+        <div class="col-lg-10 col-xl-8">
+          <header class="text-center mb-4">
+            <h1 class="display-6 mb-3">地図XMLを mojxml-rs で読み込む</h1>
+            <p class="text-body-secondary mb-0">
+              地図XMLファイルをドロップ、またはクリックして選択し、mojxml-rs の Web 版で簡単にプレビューできます。
+            </p>
+          </header>
+          <div class="card shadow-sm mb-4">
+            <div
+              id="drop-area"
+              class="drop-zone card-body d-flex flex-column gap-2 text-center"
+              role="button"
+              tabindex="0"
+              aria-describedby="drop-area-help"
+            >
+              <span class="fw-semibold">地図XMLファイルをここにドラッグ＆ドロップ</span>
+              <small id="drop-area-help" class="text-body-secondary">
+                解凍した .xml ファイルまたは .zip ファイルを使用できます。クリックしてファイルを選択することもできます。
+              </small>
+            </div>
+          </div>
+          <input type="file" id="file-input" accept=".xml,text/xml,.zip" hidden />
+          <section class="mb-4">
+            <h2 class="h5 mb-3">処理状況</h2>
+            <div class="card shadow-sm">
+              <div class="card-body">
+                <pre id="status" class="mb-0 small" aria-live="polite"></pre>
+              </div>
+            </div>
+          </section>
+          <section>
+            <h2 class="h5 mb-3">プレビュー</h2>
+            <div class="card shadow-sm overflow-hidden">
+              <div id="map" role="region" aria-label="Parsed GeoJSON preview"></div>
+            </div>
+          </section>
+          <p class="text-center text-body-secondary mt-4 mb-0">
+            このツールは、
+            <a href="https://github.com/KotobaMedia/mojxml-rs" class="link-primary"
+              ><code>KotobaMedia/mojxml-rs</code></a
+            >
+            を使って地図XMLの変換を行っております。
+          </p>
+          <p class="text-center text-body-secondary mt-4 mb-0">
+            © 2025 <a href="https://kotobamedia.com" class="link-primary">KotobaMedia</a>
+          </p>
+        </div>
+      </div>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
