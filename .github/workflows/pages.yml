@@ -48,9 +48,6 @@ jobs:
         working-directory: web
 
       - name: Build web bundle
-        env:
-          # GitHub Pages will be in a subdirectory.
-          VITE_BASE_URL: /mojxml-rs/
         run: pnpm run build
         working-directory: web
 
