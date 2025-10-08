@@ -1,5 +1,6 @@
 import maplibregl from "maplibre-gl";
 import type { FeatureCollection, GeoJsonProperties } from "geojson";
+import { unzip } from "fflate";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 type WorkerSuccessMessage = {
@@ -196,6 +197,115 @@ function registerHoverInteraction(map: maplibregl.Map, layerId: string) {
 let nextWorkerRequestId = 0;
 let mapInstance: maplibregl.Map | undefined;
 
+type XmlDocument = {
+  fileName: string;
+  xml: string;
+};
+
+type ParsedDocument = {
+  entry: XmlDocument;
+  result: WorkerSuccessMessage;
+};
+
+type FailedDocument = {
+  entry: XmlDocument;
+  error: unknown;
+};
+
+const ZIP_MIME_TYPES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-zip",
+  "multipart/x-zip",
+]);
+
+const textDecoder = new TextDecoder();
+const ZIP_EXTENSION = ".zip";
+const XML_EXTENSION = ".xml";
+
+const describeError = (error: unknown) => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error === undefined) {
+    return "undefined";
+  }
+  try {
+    const json = JSON.stringify(error);
+    return json ?? String(error);
+  } catch (jsonError) {
+    console.warn("Failed to stringify error description:", jsonError);
+    return String(error);
+  }
+};
+
+const isZipFile = (file: File) => {
+  const name = file.name.toLowerCase();
+  return name.endsWith(ZIP_EXTENSION) || ZIP_MIME_TYPES.has(file.type);
+};
+
+const normalizeZipEntryName = (name: string) => name.replaceAll("\\", "/");
+
+const unzipToObject = (data: Uint8Array) =>
+  new Promise<Record<string, Uint8Array>>((resolve, reject) => {
+    unzip(data, (error, result) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(result);
+    });
+  });
+
+async function extractXmlDocumentsFromZip(
+  bytes: Uint8Array,
+  originPath: string,
+): Promise<XmlDocument[]> {
+  const xmlDocuments: XmlDocument[] = [];
+  let entries: Record<string, Uint8Array>;
+
+  try {
+    entries = await unzipToObject(bytes);
+  } catch (error) {
+    console.error(`Failed to unzip ${originPath}:`, error);
+    throw error;
+  }
+
+  for (const [rawName, content] of Object.entries(entries)) {
+    const normalizedName = normalizeZipEntryName(rawName);
+    if (!normalizedName || normalizedName.endsWith("/")) {
+      continue;
+    }
+
+    const fullPath = `${originPath}/${normalizedName}`;
+    const lowerName = normalizedName.toLowerCase();
+
+    if (lowerName.endsWith(ZIP_EXTENSION)) {
+      try {
+        const nestedDocuments = await extractXmlDocumentsFromZip(content, fullPath);
+        xmlDocuments.push(...nestedDocuments);
+      } catch (error) {
+        console.error(`Failed to process nested archive ${fullPath}:`, error);
+      }
+      continue;
+    }
+
+    if (lowerName.endsWith(XML_EXTENSION)) {
+      try {
+        const xml = textDecoder.decode(content);
+        xmlDocuments.push({ fileName: fullPath, xml });
+      } catch (error) {
+        console.error(`Failed to decode XML document ${fullPath}:`, error);
+      }
+    }
+  }
+
+  return xmlDocuments;
+}
+
 const parseXmlWithWorker = (fileName: string, xml: string) =>
   new Promise<WorkerSuccessMessage>((resolve, reject) => {
     const requestId = nextWorkerRequestId++;
@@ -233,6 +343,43 @@ const parseXmlWithWorker = (fileName: string, xml: string) =>
     });
   });
 
+const parseXmlDocumentsWithWorker = async (
+  entries: XmlDocument[],
+  callbacks?: {
+    onSuccess?: (parsed: ParsedDocument) => void;
+    onFailure?: (failed: FailedDocument) => void;
+  },
+) => {
+  const settled = await Promise.all(
+    entries.map(async (entry) => {
+      console.log("starting parse", entry.fileName);
+      try {
+        const result = await parseXmlWithWorker(entry.fileName, entry.xml);
+        const success: ParsedDocument = { entry, result };
+        callbacks?.onSuccess?.(success);
+        return success;
+      } catch (error) {
+        const failure: FailedDocument = { entry, error };
+        callbacks?.onFailure?.(failure);
+        return failure;
+      }
+    }),
+  );
+
+  const successes: ParsedDocument[] = [];
+  const failures: FailedDocument[] = [];
+
+  for (const item of settled) {
+    if ("result" in item) {
+      successes.push(item);
+    } else {
+      failures.push(item);
+    }
+  }
+
+  return { successes, failures };
+};
+
 async function main() {
   const dropArea = document.getElementById("drop-area");
   const statusEl = document.getElementById("status");
@@ -244,23 +391,131 @@ async function main() {
     return;
   }
 
-  const setStatus = (message: string) => {
-    statusEl.textContent = message;
+  const statusLines: string[] = [];
+
+  const renderStatus = () => {
+    statusEl.textContent = statusLines.join("\n");
+    statusEl.scrollTop = statusEl.scrollHeight;
+  };
+
+  const resetStatus = (message: string) => {
+    statusLines.length = 0;
+    statusLines.push(message);
+    renderStatus();
+  };
+
+  const appendStatus = (message: string) => {
+    statusLines.push(message);
+    renderStatus();
+  };
+
+  const replaceLastStatus = (message: string) => {
+    if (statusLines.length === 0) {
+      statusLines.push(message);
+    } else {
+      statusLines[statusLines.length - 1] = message;
+    }
+    renderStatus();
+  };
+
+  const summarizeResults = (successes: ParsedDocument[], failures: FailedDocument[]) => {
+    const totalElapsedMs = successes.reduce((sum, item) => sum + item.result.elapsedMs, 0);
+    const totalFeatures = successes.reduce(
+      (sum, item) => sum + item.result.result.features.length,
+      0,
+    );
+
+    if (successes.length === 0) {
+      const failureMessages = failures
+        .map((failure) => `${failure.entry.fileName}: ${describeError(failure.error)}`)
+        .join(" • ");
+      return {
+        message:
+          failures.length === 0
+            ? "No XML documents were processed."
+            : `Failed to parse XML • ${failureMessages}`,
+        collection: undefined,
+      };
+    }
+
+    const mergedCollection: FeatureCollection = {
+      type: "FeatureCollection",
+      features: successes.flatMap((item) => item.result.result.features ?? []),
+    };
+
+    const summaryParts = [
+      `Parsed ${successes.length} XML file${successes.length === 1 ? "" : "s"}`,
+      `Total ${totalFeatures} feature${totalFeatures === 1 ? "" : "s"}`,
+    ];
+
+    if (totalElapsedMs > 0) {
+      summaryParts.push(`Worker time ${totalElapsedMs.toFixed(2)} ms`);
+    }
+
+    if (failures.length > 0) {
+      const failureSummary = failures
+        .map((failure) => `${failure.entry.fileName}: ${describeError(failure.error)}`)
+        .join(" • ");
+      summaryParts.push(`Failed ${failures.length} • ${failureSummary}`);
+    }
+
+    return {
+      message: summaryParts.join(" • "),
+      collection: mergedCollection,
+    };
+  };
+
+  const handleXmlDocuments = async (documents: XmlDocument[], originName: string) => {
+    if (documents.length === 0) {
+      appendStatus(`No XML documents found in ${originName}.`);
+      return;
+    }
+
+    appendStatus(
+      `Parsing ${documents.length} XML file${documents.length === 1 ? "" : "s"} from ${originName}...`,
+    );
+
+    const { successes, failures } = await parseXmlDocumentsWithWorker(documents, {
+      onSuccess: (parsed) => {
+        const featureCount = parsed.result.result.features.length;
+        appendStatus(
+          `Processed ${parsed.entry.fileName}: ${featureCount} feature${
+            featureCount === 1 ? "" : "s"
+          } in ${parsed.result.elapsedMs.toFixed(2)} ms`,
+        );
+      },
+      onFailure: (failed) => {
+        appendStatus(`Failed ${failed.entry.fileName}: ${describeError(failed.error)}`);
+      },
+    });
+    const { message, collection } = summarizeResults(successes, failures);
+
+    if (collection) {
+      updateMapWithGeoJson(collection);
+    }
+    appendStatus(message);
   };
 
   const handleFile = async (file: File) => {
-    setStatus(`Reading ${file.name}...`);
+    resetStatus(`Reading ${file.name}...`);
     try {
+      if (isZipFile(file)) {
+        const arrayBuffer = await file.arrayBuffer();
+        replaceLastStatus(`Read ${file.name} (${arrayBuffer.byteLength} bytes).`);
+        const documents = await extractXmlDocumentsFromZip(
+          new Uint8Array(arrayBuffer),
+          file.name,
+        );
+        await handleXmlDocuments(documents, file.name);
+        return;
+      }
+
       const text = await file.text();
-      const { result, elapsedMs } = await parseXmlWithWorker(file.name, text);
-      const summary = `Parsed in ${elapsedMs.toFixed(2)} ms • ${result.features.length} features`;
-      setStatus(`${summary}`);
-      updateMapWithGeoJson(result);
+      replaceLastStatus(`Read ${file.name} (${text.length} chars).`);
+      await handleXmlDocuments([{ fileName: file.name, xml: text }], file.name);
     } catch (error) {
-      console.error("Failed to parse XML:", error);
-      const message =
-        error instanceof Error ? error.message : JSON.stringify(error);
-      setStatus(`Error parsing ${file.name}: ${message}`);
+      console.error("Failed to process file:", error);
+      appendStatus(`Error processing ${file.name}: ${describeError(error)}`);
     }
   };
 
@@ -326,7 +581,7 @@ async function main() {
     removeHighlight();
     const file = event.dataTransfer?.files?.[0];
     if (!file) {
-      setStatus("No file detected. Please drop an XML file.");
+      resetStatus("No file detected. Please drop an XML file.");
       return;
     }
     void handleFile(file);
@@ -349,7 +604,7 @@ async function main() {
     }
   });
 
-  setStatus("Drop an XML file above to parse it.");
+  resetStatus("Drop an XML file above to parse it.");
 }
 
 void main();

@@ -16,6 +16,7 @@
     "vite": "^7.1.7"
   },
   "dependencies": {
+    "fflate": "^0.8.2",
     "maplibre-gl": "^5.8.0"
   }
 }
