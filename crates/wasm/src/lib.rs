@@ -23,7 +23,7 @@ pub fn parse_xml_content(file_name: &str, xml_content: &str) -> Result<String, J
             Err(err) => {
                 return Err(JsValue::from_str(&format!(
                     "Failed to serialize feature properties: {err}"
-                )))
+                )));
             }
         };
 

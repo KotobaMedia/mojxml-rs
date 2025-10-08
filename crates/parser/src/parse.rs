@@ -206,8 +206,9 @@ where
     Ok(curves)
 }
 
-fn transform_curves_crs<'a>(
-    curves: &mut HashMap<&'a str, Curve>,
+/// Transform all curves' coordinates from source_crs to target_crs in-place.
+fn transform_curves_crs(
+    curves: &mut HashMap<&str, Curve>,
     source_crs: &Proj,
     target_crs: &Proj,
 ) -> Result<()> {
