@@ -27,8 +27,7 @@ jobs:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          # Fix to 1.89.0 until https://github.com/rust-lang/rust/issues/131960 is solved
-          toolchain: 1.89.0
+          toolchain: stable
           target: ${{ matrix.job.arch }}
           components: clippy, rustfmt
 
