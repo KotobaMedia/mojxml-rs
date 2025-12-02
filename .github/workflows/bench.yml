@@ -3,6 +3,10 @@ name: Benchmark comparison
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/bench.yml
+      - Cargo.lock
+      - crates/**/*.rs
 
 jobs:
   bench-compare:
