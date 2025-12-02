@@ -17,6 +17,10 @@ license = "MIT"
 
 [workspace.metadata.release]
 allow-branch = ["main"]
+shared-version = true
+dependent-version = "upgrade"
+tag-prefix = ""
+tag-name = "v{{version}}"
 
 [profile.release]
 # debug = true

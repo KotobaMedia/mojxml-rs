@@ -7,6 +7,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.release]
+tag = true
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
@@ -18,8 +21,8 @@ geoparquet-batch-writer = { workspace = true }
 geozero = "0.14"
 indicatif = "0.18"
 log = "0.4"
-mojxml-parser = { path = "../parser", features = ["geoparquet"] }
-mojxml-reader = { path = "../reader" }
+mojxml-parser = { version = "0.2.1", path = "../parser", features = ["geoparquet"] }
+mojxml-reader = { version = "0.2.1", path = "../reader" }
 num_cpus = "1"
 serde = { workspace = true }
 serde_json = "1"
