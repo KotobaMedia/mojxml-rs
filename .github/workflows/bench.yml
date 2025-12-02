@@ -13,8 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout (full history)
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # needed to checkout base branch
 
@@ -62,12 +61,23 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
+      - name: Find previous benchmark comment
+        if: ${{ github.event_name == 'pull_request' }}
+        id: find-comment
+        uses: peter-evans/find-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: Benchmark comparison
+
       - name: Comment on PR with results
         if: ${{ github.event_name == 'pull_request' }}
         uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          edit-mode: replace
           body: |
-            Benchmark comparison (base = `${{ github.base_ref }}`, PR = `${{ github.head_ref }}`):
+            Benchmark comparison (base = `${{ github.base_ref }}`, PR = `${{ github.head_ref }}` `${{ github.sha }}`):
 
             ${{ steps.benchdiff.outputs.body }}
