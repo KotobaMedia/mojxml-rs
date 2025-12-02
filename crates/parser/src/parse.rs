@@ -2,8 +2,8 @@ use crate::constants::{get_proj, get_xml_namespace};
 use crate::error::{Error, Result};
 use crate::types::{CommonProperties, Feature, FeatureProperties};
 use crate::{ParsedXML, 筆界未定構成筆};
+use geo::algorithm::interior_point::InteriorPoint;
 use geo_types::{LineString, Point, Polygon};
-use polylabel::polylabel;
 use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
 use std::collections::HashMap;
@@ -111,8 +111,11 @@ fn parse_constituent_fude(node: &Node) -> 筆界未定構成筆 {
 }
 
 fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
-    let pop = polylabel(polygon, &0.001)?;
-    Ok(pop)
+    // interior_point returns None if the polygon is empty or has no interior point
+    // We've tested on 2024 data, and all polygons have an interior point
+    polygon
+        .interior_point()
+        .ok_or_else(|| Error::InteriorPointUnavailable)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -436,6 +439,7 @@ pub fn parse_xml_content(
 mod tests {
     use super::*;
     use crate::constants::get_proj;
+    use geo::Contains;
     use geo::{Area, BooleanOps};
     use geo_types::wkt;
     use std::collections::HashMap;
@@ -576,5 +580,28 @@ mod tests {
             first_constituent.地番,
             first_constituent.大字コード
         );
+    }
+
+    #[test]
+    fn test_representative_point_should_be_inside_of_polygon() {
+        // Construct the path relative to the Cargo manifest directory
+        let xml_path = testdata_path().join("46505-3411-56.xml");
+        let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
+        let options = ParseOptions {
+            include_arbitrary_crs: false,
+            include_chikugai: false,
+        };
+        let ParsedXML {
+            file_name: _,
+            features,
+            common_props: _,
+        } = parse_xml_content("46505-3411-56.xml", &xml_temp, &options)
+            .expect("Failed to parse XML");
+
+        for feature in features.iter() {
+            let rep_point = Point::new(feature.props.代表点経度, feature.props.代表点緯度);
+            let is_inside = feature.geometry.contains(&rep_point);
+            assert!(is_inside, "Representative point is outside of the polygon");
+        }
     }
 }

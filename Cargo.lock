@@ -757,23 +757,6 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "geo"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f811f663912a69249fa620dcd2a005db7254529da2d8a0b23942e81f47084501"
-dependencies = [
- "earcutr",
- "float_next_after",
- "geo-types",
- "geographiclib-rs",
- "log",
- "num-traits",
- "robust",
- "rstar",
- "spade",
-]
-
-[[package]]
-name = "geo"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fc1a1678e54befc9b4bcab6cd43b8e7f834ae8ea121118b0fd8c42747675b4a"
@@ -1314,10 +1297,9 @@ name = "mojxml-parser"
 version = "0.2.1"
 dependencies = [
  "criterion",
- "geo 0.31.0",
+ "geo",
  "geo-types",
  "geoparquet-batch-writer",
- "polylabel",
  "proj4rs",
  "roxmltree",
  "serde",
@@ -1340,7 +1322,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "flatgeobuf",
- "geo 0.31.0",
+ "geo",
  "geo-types",
  "geojson",
  "geoparquet-batch-writer",
@@ -1587,17 +1569,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
 dependencies = [
  "plotters-backend",
-]
-
-[[package]]
-name = "polylabel"
-version = "3.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20b682daed9c6adcacc2c546410d7692babe5bf946e71a5e3b8b5c9b20d604b2"
-dependencies = [
- "geo 0.28.0",
- "num-traits",
- "thiserror 1.0.69",
 ]
 
 [[package]]

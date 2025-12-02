@@ -22,8 +22,8 @@ pub enum Error {
     Projection(#[from] proj4rs::errors::Error),
     #[error("IO error: {0}")]
     FS(#[from] std::io::Error),
-    #[error("Failed to find point on polygon")]
-    PolylabelError(#[from] polylabel::errors::PolylabelError),
+    #[error("Failed to calculate interior point")]
+    InteriorPointUnavailable,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

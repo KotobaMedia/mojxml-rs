@@ -14,7 +14,7 @@ geoparquet = ["dep:geoparquet-batch-writer"]
 [dependencies]
 geo-types = { workspace = true }
 geoparquet-batch-writer = { workspace = true, optional = true }
-polylabel = "3.2.0"
+geo = { workspace = true }
 proj4rs = "0.1.8"
 roxmltree = "0.20.0"
 serde = { workspace = true }
