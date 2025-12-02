@@ -36,15 +36,14 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           git checkout origin/$BASE_REF
-          # you can scope benches if needed, e.g. `cargo bench my_bench`
-          cargo bench -- --save-baseline base
+          cargo bench -p mojxml-parser --bench parser_bench -- --save-baseline base
 
       - name: Run benchmarks on PR code
         env:
           PR_SHA: ${{ github.sha }}
         run: |
           git checkout $PR_SHA
-          cargo bench -- --save-baseline pr
+          cargo bench -p mojxml-parser --bench parser_bench -- --save-baseline pr
 
       - name: Compare baselines with critcmp
         id: benchdiff
