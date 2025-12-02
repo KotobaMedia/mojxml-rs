@@ -110,9 +110,12 @@ fn parse_constituent_fude(node: &Node) -> 筆界未定構成筆 {
     constituent
 }
 
-fn point_on_polygon(polygon: &Polygon) -> Point<f64> {
-    let pop = polygon.interior_point();
-    pop.unwrap()
+fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
+    // interior_point returns None if the polygon is empty or has no interior point
+    // We've tested on 2024 data, and all polygons have an interior point
+    polygon
+        .interior_point()
+        .ok_or_else(|| Error::InteriorPointUnavailable)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -348,7 +351,7 @@ where
             予備コード.ok_or_else(|| Error::MissingElement("予備コード".to_string()))?;
         let 地番 = 地番.ok_or_else(|| Error::MissingElement("地番".to_string()))?;
 
-        let pop = point_on_polygon(&geometry);
+        let pop = point_on_polygon(&geometry)?;
         features.push(Feature {
             geometry,
             props: FeatureProperties {
