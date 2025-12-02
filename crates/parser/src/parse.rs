@@ -115,7 +115,7 @@ fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
     // We've tested on 2024 data, and all polygons have an interior point
     polygon
         .interior_point()
-        .ok_or_else(|| Error::InteriorPointUnavailable)
+        .ok_or(Error::InteriorPointUnavailable)
 }
 
 #[derive(Debug, Clone, Default)]
