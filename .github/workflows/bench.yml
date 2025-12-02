@@ -1,0 +1,70 @@
+name: Benchmark comparison
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  bench-compare:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # needed to checkout base branch
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-gnu
+
+      - name: Install critcmp
+        run: cargo install critcmp
+
+      # Optional: reuse the same target dir across checkouts for speed
+      - name: Set shared target dir
+        run: echo "CARGO_TARGET_DIR=$PWD/target" >> $GITHUB_ENV
+
+      - name: Run benchmarks on base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git checkout origin/$BASE_REF
+          # you can scope benches if needed, e.g. `cargo bench my_bench`
+          cargo bench -- --save-baseline base
+
+      - name: Run benchmarks on PR code
+        env:
+          PR_SHA: ${{ github.sha }}
+        run: |
+          git checkout $PR_SHA
+          cargo bench -- --save-baseline pr
+
+      - name: Compare baselines with critcmp
+        id: benchdiff
+        run: |
+          # Generate markdown, wrap in code fences
+          {
+            echo '```'
+            critcmp base pr
+            echo '```'
+          } > bench.md
+
+          # Expose as step output
+          {
+            echo 'body<<EOF'
+            cat bench.md
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment on PR with results
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            Benchmark comparison (base = `${{ github.base_ref }}`, PR = `${{ github.head_ref }}`):
+
+            ${{ steps.benchdiff.outputs.body }}
