@@ -21,8 +21,8 @@ geoparquet-batch-writer = { workspace = true }
 geozero = "0.14"
 indicatif = "0.18"
 log = "0.4"
-mojxml-parser = { version = "0.2.1", path = "../parser", features = ["geoparquet"] }
-mojxml-reader = { version = "0.2.1", path = "../reader" }
+mojxml-parser = { version = "0.2.2", path = "../parser", features = ["geoparquet"] }
+mojxml-reader = { version = "0.2.2", path = "../reader" }
 num_cpus = "1"
 serde = { workspace = true }
 serde_json = "1"
