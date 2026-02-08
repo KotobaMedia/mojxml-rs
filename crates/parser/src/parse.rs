@@ -1,4 +1,4 @@
-use crate::constants::{get_proj, get_xml_namespace};
+use crate::constants::get_proj;
 use crate::error::{Error, Result};
 use crate::types::{CommonProperties, Feature, FeatureProperties};
 use crate::{ParsedXML, 筆界未定構成筆};
@@ -6,14 +6,22 @@ use geo::algorithm::interior_point::InteriorPoint;
 use geo_types::{LineString, Point, Polygon};
 use proj4rs::proj::Proj;
 use roxmltree::{Document, Node};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 // --- Type Aliases ---
 type Curve = Point;
 type Surface = Polygon;
 
-fn has_tag(node: &Node, namespace: Option<&str>, name: &str) -> bool {
-    node.tag_name().name() == name && node.tag_name().namespace() == namespace
+fn has_name(node: &Node, name: &str) -> bool {
+    node.tag_name().name() == name
+}
+
+fn find_child_by_name<'a, 'd>(node: &Node<'a, 'd>, name: &str) -> Option<Node<'a, 'd>>
+where
+    'd: 'a,
+{
+    node.children()
+        .find(|child| child.is_element() && has_name(child, name))
 }
 
 fn required_attribute<'a, 'd>(node: &Node<'a, 'd>, attr: &str) -> Result<&'a str>
@@ -64,7 +72,6 @@ fn parse_xy(node: &Node) -> Result<(f64, f64)> {
 fn collect_ring_points<'a, 'd>(
     boundary: &Node<'a, 'd>,
     curves: &HashMap<&'a str, Curve>,
-    zmn_ns: Option<&str>,
 ) -> Result<Vec<Point>>
 where
     'd: 'a,
@@ -72,8 +79,8 @@ where
     let mut ring_points = Vec::new();
 
     for ring in boundary
-        .descendants()
-        .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Ring"))
+        .children()
+        .filter(|child| child.is_element() && has_name(child, "GM_Ring"))
     {
         for curve_ref in ring.children().filter(|child| child.is_element()) {
             let idref = required_attribute(&curve_ref, "idref")?;
@@ -139,16 +146,15 @@ fn parse_points<'a, 'd>(spatial_element: &Node<'a, 'd>) -> Result<HashMap<&'a st
 where
     'd: 'a,
 {
-    let mut points = HashMap::new();
-    let zmn_ns = get_xml_namespace(Some("zmn"));
+    let mut points: HashMap<&'a str, Point> = HashMap::default();
 
     for point in spatial_element
         .children()
-        .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Point"))
+        .filter(|child| child.is_element() && has_name(child, "GM_Point"))
     {
-        let direct_position = point
-            .descendants()
-            .find(|child| child.is_element() && has_tag(child, zmn_ns, "DirectPosition"))
+        let position_node = find_child_by_name(&point, "GM_Point.position")
+            .ok_or_else(|| Error::MissingElement("GM_Point.position".to_string()))?;
+        let direct_position = find_child_by_name(&position_node, "DirectPosition")
             .ok_or_else(|| Error::MissingElement("DirectPosition".to_string()))?;
         let (x, y) = parse_xy(&direct_position)?;
         let point_id = required_attribute(&point, "id")?;
@@ -165,23 +171,22 @@ fn parse_curves<'a, 'd>(
 where
     'd: 'a,
 {
-    let mut curves = HashMap::new();
-    let zmn_ns = get_xml_namespace(Some("zmn"));
+    let mut curves: HashMap<&'a str, Curve> = HashMap::default();
 
     for curve in spatial_element
         .children()
-        .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Curve"))
+        .filter(|child| child.is_element() && has_name(child, "GM_Curve"))
     {
         let curve_id = required_attribute(&curve, "id")?;
 
         let segment = curve
             .children()
-            .find(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Curve.segment"))
+            .find(|child| child.is_element() && has_name(child, "GM_Curve.segment"))
             .ok_or_else(|| Error::MissingElement("GM_Curve.segment".to_string()))?;
 
-        let column = segment
-            .descendants()
-            .find(|child| child.is_element() && has_tag(child, zmn_ns, "GM_PointArray.column"))
+        let column = find_child_by_name(&segment, "GM_LineString")
+            .and_then(|line| find_child_by_name(&line, "GM_LineString.controlPoint"))
+            .and_then(|control| find_child_by_name(&control, "GM_PointArray.column"))
             .ok_or_else(|| Error::MissingElement("GM_PointArray.column".to_string()))?;
 
         let position = column
@@ -235,42 +240,34 @@ fn parse_surfaces<'a, 'd>(
 where
     'd: 'a,
 {
-    let mut surfaces = HashMap::new();
-    let zmn_ns = get_xml_namespace(Some("zmn"));
+    let mut surfaces: HashMap<&'a str, Surface> = HashMap::default();
 
     for surface in spatial_element
         .children()
-        .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Surface"))
+        .filter(|child| child.is_element() && has_name(child, "GM_Surface"))
     {
         let surface_id = required_attribute(&surface, "id")?;
 
-        let polygon = surface
-            .children()
-            .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Surface.patch"))
-            .flat_map(|patch| {
-                patch
-                    .children()
-                    .filter(|child| child.is_element() && has_tag(child, zmn_ns, "GM_Polygon"))
-            })
-            .next()
+        let polygon = find_child_by_name(&surface, "GM_Surface.patch")
+            .and_then(|patch| find_child_by_name(&patch, "GM_Polygon"))
             .ok_or_else(|| Error::MissingElement("GM_Surface.patch".to_string()))?;
 
-        let exterior = polygon
-            .descendants()
-            .find(|child| {
-                child.is_element() && has_tag(child, zmn_ns, "GM_SurfaceBoundary.exterior")
-            })
+        let surface_boundary = find_child_by_name(&polygon, "GM_Polygon.boundary")
+            .and_then(|boundary| find_child_by_name(&boundary, "GM_SurfaceBoundary"))
+            .ok_or_else(|| Error::MissingElement("GM_SurfaceBoundary".to_string()))?;
+
+        let exterior = find_child_by_name(&surface_boundary, "GM_SurfaceBoundary.exterior")
             .ok_or_else(|| Error::MissingElement("GM_SurfaceBoundary.exterior".to_string()))?;
 
-        let exterior_ring = LineString::from(collect_ring_points(&exterior, curves, zmn_ns)?);
+        let exterior_ring = LineString::from(collect_ring_points(&exterior, curves)?);
 
-        let interior_rings = polygon
-            .descendants()
-            .filter(|child| {
-                child.is_element() && has_tag(child, zmn_ns, "GM_SurfaceBoundary.interior")
-            })
-            .map(|interior| collect_ring_points(&interior, curves, zmn_ns).map(LineString::from))
-            .collect::<Result<Vec<_>>>()?;
+        let mut interior_rings = Vec::new();
+        for interior in surface_boundary
+            .children()
+            .filter(|child| child.is_element() && has_name(child, "GM_SurfaceBoundary.interior"))
+        {
+            interior_rings.push(LineString::from(collect_ring_points(&interior, curves)?));
+        }
 
         surfaces.insert(surface_id, Polygon::new(exterior_ring, interior_rings));
     }
@@ -287,11 +284,10 @@ where
     'd: 'a,
 {
     let mut features: Vec<Feature> = Vec::new();
-    let default_ns = get_xml_namespace(None);
 
     for fude in subject_elem
         .children()
-        .filter(|child| child.is_element() && has_tag(child, default_ns, "筆"))
+        .filter(|child| child.is_element() && has_name(child, "筆"))
     {
         let fude_id = required_attribute(&fude, "id")?;
         let mut geometry: Option<Polygon> = None;
@@ -442,7 +438,7 @@ mod tests {
     use geo::Contains;
     use geo::{Area, BooleanOps};
     use geo_types::wkt;
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap as HashMap;
     use std::fs;
     use std::path::PathBuf;
 
@@ -464,17 +460,21 @@ mod tests {
             .expect("failed to load target CRS")
             .expect("WGS84 should resolve to a proj definition");
 
-        let mut curves: HashMap<&str, Curve> = HashMap::from([
+        let mut curves: HashMap<&str, Curve> = [
             ("curve-1", Point::new(0.0, 0.0)),
             ("curve-2", Point::new(-1000.0, -1000.0)),
             ("curve-3", Point::new(1000.0, 1000.0)),
-        ]);
+        ]
+        .into_iter()
+        .collect();
 
-        let expected_results: HashMap<&str, Curve> = HashMap::from([
+        let expected_results: HashMap<&str, Curve> = [
             ("curve-1", Point::new(129.5, 33.0)),
             ("curve-2", Point::new(129.48929948, 32.99098186)),
             ("curve-3", Point::new(129.5107027, 33.00901721)),
-        ]);
+        ]
+        .into_iter()
+        .collect();
 
         transform_curves_crs(&mut curves, source_crs, target_crs)
             .expect("curve transformation should succeed");

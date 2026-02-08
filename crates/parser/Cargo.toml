@@ -19,6 +19,7 @@ proj4rs = "0.1.8"
 roxmltree = "0.21"
 serde = { workspace = true }
 thiserror = "2"
+rustc-hash = "2"
 
 [dev-dependencies]
 criterion = { version = "0.7", features = ["html_reports"] }
