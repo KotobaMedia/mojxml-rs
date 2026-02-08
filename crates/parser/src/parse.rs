@@ -5,116 +5,1027 @@ use crate::{ParsedXML, 筆界未定構成筆};
 use geo::algorithm::interior_point::InteriorPoint;
 use geo_types::{LineString, Point, Polygon};
 use proj4rs::proj::Proj;
-use roxmltree::{Document, Node};
+use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
 use rustc_hash::FxHashMap as HashMap;
 
 // --- Type Aliases ---
 type Curve = Point;
 type Surface = Polygon;
 
-fn has_name(node: &Node, name: &str) -> bool {
-    node.tag_name().name() == name
+#[derive(Debug, Clone, Default)]
+pub struct ParseOptions {
+    pub include_arbitrary_crs: bool,
+    pub include_chikugai: bool,
 }
 
-fn find_child_by_name<'a, 'd>(node: &Node<'a, 'd>, name: &str) -> Option<Node<'a, 'd>>
-where
-    'd: 'a,
-{
-    node.children()
-        .find(|child| child.is_element() && has_name(child, name))
+#[derive(Default)]
+struct CommonPropsBuilder {
+    map_name: Option<String>,
+    city_code: Option<String>,
+    city_name: Option<String>,
+    crs: Option<String>,
+    crs_det: Option<String>,
 }
 
-fn required_attribute<'a, 'd>(node: &Node<'a, 'd>, attr: &str) -> Result<&'a str>
-where
-    'd: 'a,
-{
-    node.attribute(attr).ok_or_else(|| Error::MissingAttribute {
-        element: node.tag_name().name().to_string(),
-        attribute: attr.to_string(),
+impl CommonPropsBuilder {
+    fn into_common_props(self) -> Result<CommonProperties> {
+        Ok(CommonProperties {
+            地図名: self
+                .map_name
+                .ok_or_else(|| Error::MissingElement("地図名".to_string()))?,
+            市区町村コード: self
+                .city_code
+                .ok_or_else(|| Error::MissingElement("市区町村コード".to_string()))?,
+            市区町村名: self
+                .city_name
+                .ok_or_else(|| Error::MissingElement("市区町村名".to_string()))?,
+            座標系: self
+                .crs
+                .ok_or_else(|| Error::MissingElement("座標系".to_string()))?,
+            測地系判別: self.crs_det,
+        })
+    }
+}
+
+#[derive(Default)]
+struct PointBuilder {
+    id: String,
+    saw_position: bool,
+    saw_direct_position: bool,
+    x: Option<f64>,
+    y: Option<f64>,
+}
+
+#[derive(Clone, Copy)]
+enum CurvePositionKind {
+    Direct,
+    Indirect,
+}
+
+#[derive(Default)]
+struct CurveBuilder {
+    id: String,
+    saw_segment: bool,
+    saw_first_column: bool,
+    first_column_depth: Option<usize>,
+    position_kind: Option<CurvePositionKind>,
+    position_depth: Option<usize>,
+    direct_x: Option<f64>,
+    direct_y: Option<f64>,
+    indirect_ref: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum BoundaryKind {
+    Exterior,
+    Interior(usize),
+}
+
+#[derive(Default)]
+struct SurfaceBuilder {
+    id: String,
+    saw_patch: bool,
+    saw_polygon: bool,
+    saw_polygon_boundary: bool,
+    saw_surface_boundary: bool,
+    saw_exterior: bool,
+    active_boundary: Option<BoundaryKind>,
+    boundary_depth: Option<usize>,
+    ring_depth: Option<usize>,
+    exterior_points: Vec<Point>,
+    interior_points: Vec<Vec<Point>>,
+}
+
+#[derive(Default)]
+struct FudeBuilder {
+    id: String,
+    geometry_ref: Option<String>,
+    precision_class: Option<String>,
+    ooaza_code: Option<String>,
+    chome_code: Option<String>,
+    koaza_code: Option<String>,
+    yobi_code: Option<String>,
+    ooaza_name: Option<String>,
+    chome_name: Option<String>,
+    koaza_name: Option<String>,
+    yobi_name: Option<String>,
+    parcel_number: Option<String>,
+    coordinate_value_type: Option<String>,
+    constituents: Vec<筆界未定構成筆>,
+}
+
+#[derive(Clone, Copy)]
+enum TextTarget {
+    RootMapName,
+    RootCityCode,
+    RootCityName,
+    RootCrs,
+    RootCrsDet,
+    PointX,
+    PointY,
+    CurveDirectX,
+    CurveDirectY,
+    FudePrecisionClass,
+    FudeOoazaCode,
+    FudeChomeCode,
+    FudeKoazaCode,
+    FudeYobiCode,
+    FudeOoazaName,
+    FudeChomeName,
+    FudeKoazaName,
+    FudeYobiName,
+    FudeParcelNumber,
+    FudeCoordinateValueType,
+    ConstituentOoazaCode,
+    ConstituentChomeCode,
+    ConstituentKoazaCode,
+    ConstituentYobiCode,
+    ConstituentOoazaName,
+    ConstituentChomeName,
+    ConstituentKoazaName,
+    ConstituentYobiName,
+    ConstituentParcelNumber,
+}
+
+struct ActiveText {
+    target: TextTarget,
+    depth: usize,
+    value: String,
+    has_text: bool,
+}
+
+impl ActiveText {
+    fn new(target: TextTarget, depth: usize) -> Self {
+        Self {
+            target,
+            depth,
+            value: String::new(),
+            has_text: false,
+        }
+    }
+}
+
+struct StreamParser<'a> {
+    options: &'a ParseOptions,
+    common_builder: CommonPropsBuilder,
+    common_props: Option<CommonProperties>,
+    common_checked: bool,
+    skip_features: bool,
+    source_crs: Option<&'static Proj>,
+    target_crs: Option<&'static Proj>,
+
+    in_spatial: bool,
+    in_subject: bool,
+    saw_spatial: bool,
+    saw_subject: bool,
+
+    points: HashMap<String, Point>,
+    curves: HashMap<String, Curve>,
+    surfaces: HashMap<String, Surface>,
+    features: Vec<Feature>,
+
+    point: Option<PointBuilder>,
+    curve: Option<CurveBuilder>,
+    surface: Option<SurfaceBuilder>,
+    fude: Option<FudeBuilder>,
+    constituent: Option<筆界未定構成筆>,
+
+    active_text: Option<ActiveText>,
+}
+
+impl<'a> StreamParser<'a> {
+    fn new(options: &'a ParseOptions) -> Self {
+        Self {
+            options,
+            common_builder: CommonPropsBuilder::default(),
+            common_props: None,
+            common_checked: false,
+            skip_features: false,
+            source_crs: None,
+            target_crs: None,
+            in_spatial: false,
+            in_subject: false,
+            saw_spatial: false,
+            saw_subject: false,
+            points: HashMap::with_capacity_and_hasher(16_384, Default::default()),
+            curves: HashMap::with_capacity_and_hasher(32_768, Default::default()),
+            surfaces: HashMap::with_capacity_and_hasher(4_096, Default::default()),
+            features: Vec::with_capacity(4_096),
+            point: None,
+            curve: None,
+            surface: None,
+            fude: None,
+            constituent: None,
+            active_text: None,
+        }
+    }
+
+    fn ensure_common_and_crs(&mut self) -> Result<()> {
+        if self.common_checked {
+            return Ok(());
+        }
+
+        let common_props = std::mem::take(&mut self.common_builder).into_common_props()?;
+        let source_crs = get_proj(&common_props.座標系)?;
+
+        self.common_props = Some(common_props);
+        self.common_checked = true;
+
+        match source_crs {
+            Some(source_crs) => {
+                let target_crs = get_proj("WGS84")?.expect("WGS84 CRS not found");
+                self.source_crs = Some(source_crs);
+                self.target_crs = Some(target_crs);
+            }
+            None => {
+                if !self.options.include_arbitrary_crs {
+                    self.skip_features = true;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn finish(mut self, file_name: String) -> Result<ParsedXML> {
+        if !self.common_checked {
+            self.ensure_common_and_crs()?;
+        }
+
+        let common_props = self
+            .common_props
+            .ok_or_else(|| Error::MissingElement("地図名".to_string()))?;
+
+        if self.skip_features {
+            return Ok(ParsedXML {
+                file_name,
+                features: Vec::new(),
+                common_props,
+            });
+        }
+
+        if !self.saw_spatial {
+            return Err(Error::MissingElement("空間属性".to_string()));
+        }
+
+        if !self.saw_subject {
+            return Err(Error::MissingElement("主題属性".to_string()));
+        }
+
+        Ok(ParsedXML {
+            file_name,
+            features: self.features,
+            common_props,
+        })
+    }
+
+    fn begin_text(&mut self, target: TextTarget, depth: usize) {
+        self.active_text = Some(ActiveText::new(target, depth));
+    }
+
+    fn push_text_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        if let Some(active) = &mut self.active_text {
+            active.value.push_str(std::str::from_utf8(bytes)?);
+            active.has_text = true;
+        }
+        Ok(())
+    }
+
+    fn finalize_text_if_needed(&mut self, depth: usize) -> Result<()> {
+        let should_finalize = match &self.active_text {
+            Some(active) => active.depth == depth,
+            None => false,
+        };
+
+        if !should_finalize {
+            return Ok(());
+        }
+
+        let active = self
+            .active_text
+            .take()
+            .expect("active text must be present");
+        let value = if active.has_text {
+            Some(active.value.as_str())
+        } else {
+            None
+        };
+        self.apply_text(active.target, value)
+    }
+
+    fn apply_text(&mut self, target: TextTarget, value: Option<&str>) -> Result<()> {
+        match target {
+            TextTarget::RootMapName => self.common_builder.map_name = value.map(str::to_owned),
+            TextTarget::RootCityCode => self.common_builder.city_code = value.map(str::to_owned),
+            TextTarget::RootCityName => self.common_builder.city_name = value.map(str::to_owned),
+            TextTarget::RootCrs => self.common_builder.crs = value.map(str::to_owned),
+            TextTarget::RootCrsDet => self.common_builder.crs_det = value.map(str::to_owned),
+
+            TextTarget::PointX => {
+                if let Some(point) = &mut self.point {
+                    point.x = value.map(|v| v.parse()).transpose()?;
+                }
+            }
+            TextTarget::PointY => {
+                if let Some(point) = &mut self.point {
+                    point.y = value.map(|v| v.parse()).transpose()?;
+                }
+            }
+
+            TextTarget::CurveDirectX => {
+                if let Some(curve) = &mut self.curve {
+                    curve.direct_x = value.map(|v| v.parse()).transpose()?;
+                }
+            }
+            TextTarget::CurveDirectY => {
+                if let Some(curve) = &mut self.curve {
+                    curve.direct_y = value.map(|v| v.parse()).transpose()?;
+                }
+            }
+
+            TextTarget::FudePrecisionClass => {
+                if let Some(fude) = &mut self.fude {
+                    fude.precision_class = value.map(str::to_owned);
+                }
+            }
+            TextTarget::FudeOoazaCode => {
+                if let Some(fude) = &mut self.fude {
+                    fude.ooaza_code = Some(value.unwrap_or("").to_owned());
+                }
+            }
+            TextTarget::FudeChomeCode => {
+                if let Some(fude) = &mut self.fude {
+                    fude.chome_code = Some(value.unwrap_or("").to_owned());
+                }
+            }
+            TextTarget::FudeKoazaCode => {
+                if let Some(fude) = &mut self.fude {
+                    fude.koaza_code = Some(value.unwrap_or("").to_owned());
+                }
+            }
+            TextTarget::FudeYobiCode => {
+                if let Some(fude) = &mut self.fude {
+                    fude.yobi_code = Some(value.unwrap_or("").to_owned());
+                }
+            }
+            TextTarget::FudeOoazaName => {
+                if let Some(fude) = &mut self.fude {
+                    fude.ooaza_name = value.map(str::to_owned);
+                }
+            }
+            TextTarget::FudeChomeName => {
+                if let Some(fude) = &mut self.fude {
+                    fude.chome_name = value.map(str::to_owned);
+                }
+            }
+            TextTarget::FudeKoazaName => {
+                if let Some(fude) = &mut self.fude {
+                    fude.koaza_name = value.map(str::to_owned);
+                }
+            }
+            TextTarget::FudeYobiName => {
+                if let Some(fude) = &mut self.fude {
+                    fude.yobi_name = value.map(str::to_owned);
+                }
+            }
+            TextTarget::FudeParcelNumber => {
+                if let Some(fude) = &mut self.fude {
+                    fude.parcel_number = Some(value.unwrap_or("").to_owned());
+                }
+            }
+            TextTarget::FudeCoordinateValueType => {
+                if let Some(fude) = &mut self.fude {
+                    fude.coordinate_value_type = value.map(str::to_owned);
+                }
+            }
+
+            TextTarget::ConstituentOoazaCode => {
+                if let Some(constituent) = &mut self.constituent {
+                    constituent.大字コード = value.unwrap_or("").to_owned();
+                }
+            }
+            TextTarget::ConstituentChomeCode => {
+                if let Some(constituent) = &mut self.constituent {
+                    constituent.丁目コード = value.unwrap_or("").to_owned();
+                }
+            }
+            TextTarget::ConstituentKoazaCode => {
+                if let Some(constituent) = &mut self.constituent {
+                    constituent.小字コード = value.unwrap_or("").to_owned();
+                }
+            }
+            TextTarget::ConstituentYobiCode => {
+                if let Some(constituent) = &mut self.constituent {
+                    constituent.予備コード = value.unwrap_or("").to_owned();
+                }
+            }
+            TextTarget::ConstituentOoazaName => {
+                if let Some(constituent) = &mut self.constituent {
+                    constituent.大字名 = value.map(str::to_owned);
+                }
+            }
+            TextTarget::ConstituentChomeName => {
+                if let Some(constituent) = &mut self.constituent {
+                    constituent.丁目名 = value.map(str::to_owned);
+                }
+            }
+            TextTarget::ConstituentKoazaName => {
+                if let Some(constituent) = &mut self.constituent {
+                    constituent.小字名 = value.map(str::to_owned);
+                }
+            }
+            TextTarget::ConstituentYobiName => {
+                if let Some(constituent) = &mut self.constituent {
+                    constituent.予備名 = value.map(str::to_owned);
+                }
+            }
+            TextTarget::ConstituentParcelNumber => {
+                if let Some(constituent) = &mut self.constituent {
+                    constituent.地番 = value.unwrap_or("").to_owned();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_start(&mut self, start: &BytesStart<'_>, depth: usize) -> Result<()> {
+        let start_name = start.name();
+        let name = local_name(start_name.as_ref());
+
+        if depth == 2 {
+            match () {
+                _ if name_eq(name, "地図名") => self.begin_text(TextTarget::RootMapName, depth),
+                _ if name_eq(name, "市区町村コード") => {
+                    self.begin_text(TextTarget::RootCityCode, depth)
+                }
+                _ if name_eq(name, "市区町村名") => {
+                    self.begin_text(TextTarget::RootCityName, depth)
+                }
+                _ if name_eq(name, "座標系") => self.begin_text(TextTarget::RootCrs, depth),
+                _ if name_eq(name, "測地系判別") => {
+                    self.begin_text(TextTarget::RootCrsDet, depth)
+                }
+                _ if name_eq(name, "空間属性") => {
+                    self.ensure_common_and_crs()?;
+                    if !self.skip_features {
+                        self.saw_spatial = true;
+                        self.in_spatial = true;
+                    }
+                }
+                _ if name_eq(name, "主題属性") => {
+                    self.ensure_common_and_crs()?;
+                    if !self.skip_features {
+                        self.saw_subject = true;
+                        self.in_subject = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if self.skip_features {
+            return Ok(());
+        }
+
+        if self.in_spatial {
+            self.handle_spatial_start(start, name, depth)?;
+        }
+
+        if self.in_subject {
+            self.handle_subject_start(start, name, depth)?;
+        }
+
+        Ok(())
+    }
+
+    fn handle_spatial_start(
+        &mut self,
+        start: &BytesStart<'_>,
+        name: &[u8],
+        depth: usize,
+    ) -> Result<()> {
+        if depth == 3 && name == b"GM_Point" {
+            self.start_point(start)?;
+            return Ok(());
+        }
+
+        if depth == 3 && name == b"GM_Curve" {
+            self.start_curve(start)?;
+            return Ok(());
+        }
+
+        if depth == 3 && name == b"GM_Surface" {
+            self.start_surface(start)?;
+            return Ok(());
+        }
+
+        if let Some(point) = &mut self.point {
+            match name {
+                b"GM_Point.position" => point.saw_position = true,
+                b"DirectPosition" => point.saw_direct_position = true,
+                b"X" => self.begin_text(TextTarget::PointX, depth),
+                b"Y" => self.begin_text(TextTarget::PointY, depth),
+                _ => {}
+            }
+        }
+
+        if let Some(curve) = &mut self.curve {
+            if name == b"GM_Curve.segment" {
+                curve.saw_segment = true;
+            }
+
+            if name == b"GM_PointArray.column" && !curve.saw_first_column {
+                curve.saw_first_column = true;
+                curve.first_column_depth = Some(depth);
+            }
+
+            if let Some(column_depth) = curve.first_column_depth
+                && curve.position_kind.is_none()
+                && depth == column_depth + 1
+            {
+                match name {
+                    b"GM_Position.indirect" => {
+                        curve.position_kind = Some(CurvePositionKind::Indirect);
+                        curve.position_depth = Some(depth);
+                    }
+                    b"GM_Position.direct" => {
+                        curve.position_kind = Some(CurvePositionKind::Direct);
+                        curve.position_depth = Some(depth);
+                    }
+                    _ => {
+                        return Err(Error::UnexpectedElement(name_to_string(name)));
+                    }
+                }
+            }
+
+            if let (Some(position_kind), Some(position_depth)) =
+                (curve.position_kind, curve.position_depth)
+            {
+                match position_kind {
+                    CurvePositionKind::Direct => {
+                        if depth == position_depth + 1 {
+                            match name {
+                                b"X" => self.begin_text(TextTarget::CurveDirectX, depth),
+                                b"Y" => self.begin_text(TextTarget::CurveDirectY, depth),
+                                _ => {}
+                            }
+                        }
+                    }
+                    CurvePositionKind::Indirect => {
+                        if depth == position_depth + 1 && curve.indirect_ref.is_none() {
+                            curve.indirect_ref = Some(required_attribute(start, "idref")?);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(surface) = &mut self.surface {
+            match name {
+                b"GM_Surface.patch" => surface.saw_patch = true,
+                b"GM_Polygon" => surface.saw_polygon = true,
+                b"GM_Polygon.boundary" => surface.saw_polygon_boundary = true,
+                b"GM_SurfaceBoundary" => surface.saw_surface_boundary = true,
+                b"GM_SurfaceBoundary.exterior" => {
+                    surface.saw_exterior = true;
+                    surface.active_boundary = Some(BoundaryKind::Exterior);
+                    surface.boundary_depth = Some(depth);
+                }
+                b"GM_SurfaceBoundary.interior" => {
+                    let interior_index = surface.interior_points.len();
+                    surface.interior_points.push(Vec::new());
+                    surface.active_boundary = Some(BoundaryKind::Interior(interior_index));
+                    surface.boundary_depth = Some(depth);
+                }
+                b"GM_Ring" => {
+                    if surface.active_boundary.is_some() {
+                        surface.ring_depth = Some(depth);
+                    }
+                }
+                _ => {}
+            }
+
+            if let Some(ring_depth) = surface.ring_depth
+                && depth == ring_depth + 1
+            {
+                let idref = required_attribute(start, "idref")?;
+                let curve = *self
+                    .curves
+                    .get(&idref)
+                    .ok_or_else(|| Error::PointNotFound(idref.clone()))?;
+
+                match surface.active_boundary {
+                    Some(BoundaryKind::Exterior) => surface.exterior_points.push(curve),
+                    Some(BoundaryKind::Interior(idx)) => {
+                        if let Some(interior) = surface.interior_points.get_mut(idx) {
+                            interior.push(curve);
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_subject_start(
+        &mut self,
+        start: &BytesStart<'_>,
+        name: &[u8],
+        depth: usize,
+    ) -> Result<()> {
+        if depth == 3 && name_eq(name, "筆") {
+            self.start_fude(start)?;
+            return Ok(());
+        }
+
+        if self.fude.is_none() {
+            return Ok(());
+        }
+
+        if name_eq(name, "筆界未定構成筆") {
+            self.constituent = Some(筆界未定構成筆::default());
+            return Ok(());
+        }
+
+        if self.constituent.is_some() {
+            match () {
+                _ if name_eq(name, "大字コード") => {
+                    self.begin_text(TextTarget::ConstituentOoazaCode, depth)
+                }
+                _ if name_eq(name, "丁目コード") => {
+                    self.begin_text(TextTarget::ConstituentChomeCode, depth)
+                }
+                _ if name_eq(name, "小字コード") => {
+                    self.begin_text(TextTarget::ConstituentKoazaCode, depth)
+                }
+                _ if name_eq(name, "予備コード") => {
+                    self.begin_text(TextTarget::ConstituentYobiCode, depth)
+                }
+                _ if name_eq(name, "大字名") => {
+                    self.begin_text(TextTarget::ConstituentOoazaName, depth)
+                }
+                _ if name_eq(name, "丁目名") => {
+                    self.begin_text(TextTarget::ConstituentChomeName, depth)
+                }
+                _ if name_eq(name, "小字名") => {
+                    self.begin_text(TextTarget::ConstituentKoazaName, depth)
+                }
+                _ if name_eq(name, "予備名") => {
+                    self.begin_text(TextTarget::ConstituentYobiName, depth)
+                }
+                _ if name_eq(name, "地番") => {
+                    self.begin_text(TextTarget::ConstituentParcelNumber, depth)
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        match () {
+            _ if name_eq(name, "形状") => {
+                if let Some(fude) = &mut self.fude {
+                    fude.geometry_ref = Some(required_attribute(start, "idref")?);
+                }
+            }
+            _ if name_eq(name, "精度区分") => {
+                self.begin_text(TextTarget::FudePrecisionClass, depth)
+            }
+            _ if name_eq(name, "大字コード") => {
+                self.begin_text(TextTarget::FudeOoazaCode, depth)
+            }
+            _ if name_eq(name, "丁目コード") => {
+                self.begin_text(TextTarget::FudeChomeCode, depth)
+            }
+            _ if name_eq(name, "小字コード") => {
+                self.begin_text(TextTarget::FudeKoazaCode, depth)
+            }
+            _ if name_eq(name, "予備コード") => {
+                self.begin_text(TextTarget::FudeYobiCode, depth)
+            }
+            _ if name_eq(name, "大字名") => self.begin_text(TextTarget::FudeOoazaName, depth),
+            _ if name_eq(name, "丁目名") => self.begin_text(TextTarget::FudeChomeName, depth),
+            _ if name_eq(name, "小字名") => self.begin_text(TextTarget::FudeKoazaName, depth),
+            _ if name_eq(name, "予備名") => self.begin_text(TextTarget::FudeYobiName, depth),
+            _ if name_eq(name, "地番") => self.begin_text(TextTarget::FudeParcelNumber, depth),
+            _ if name_eq(name, "座標値種別") => {
+                self.begin_text(TextTarget::FudeCoordinateValueType, depth)
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn handle_end(&mut self, name: &[u8], depth: usize) -> Result<()> {
+        self.finalize_text_if_needed(depth)?;
+
+        if self.skip_features {
+            return Ok(());
+        }
+
+        if self.in_spatial {
+            self.handle_spatial_end(name, depth)?;
+        }
+
+        if self.in_subject {
+            self.handle_subject_end(name)?;
+        }
+
+        if depth == 2 {
+            match () {
+                _ if name_eq(name, "空間属性") => self.in_spatial = false,
+                _ if name_eq(name, "主題属性") => self.in_subject = false,
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_spatial_end(&mut self, name: &[u8], depth: usize) -> Result<()> {
+        if let Some(curve) = &mut self.curve
+            && curve.position_depth == Some(depth)
+            && (name == b"GM_Position.direct" || name == b"GM_Position.indirect")
+        {
+            curve.position_depth = None;
+        }
+
+        if let Some(surface) = &mut self.surface {
+            if surface.ring_depth == Some(depth) && name == b"GM_Ring" {
+                surface.ring_depth = None;
+            }
+
+            if surface.boundary_depth == Some(depth)
+                && (name == b"GM_SurfaceBoundary.exterior"
+                    || name == b"GM_SurfaceBoundary.interior")
+            {
+                surface.active_boundary = None;
+                surface.boundary_depth = None;
+            }
+        }
+
+        match name {
+            b"GM_Point" => self.finish_point()?,
+            b"GM_Curve" => self.finish_curve()?,
+            b"GM_Surface" => self.finish_surface()?,
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn handle_subject_end(&mut self, name: &[u8]) -> Result<()> {
+        match () {
+            _ if name_eq(name, "筆界未定構成筆") => {
+                if let Some(constituent) = self.constituent.take()
+                    && let Some(fude) = &mut self.fude
+                {
+                    fude.constituents.push(constituent);
+                }
+            }
+            _ if name_eq(name, "筆") => self.finish_fude()?,
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn start_point(&mut self, start: &BytesStart<'_>) -> Result<()> {
+        self.point = Some(PointBuilder {
+            id: required_attribute(start, "id")?,
+            ..Default::default()
+        });
+        Ok(())
+    }
+
+    fn start_curve(&mut self, start: &BytesStart<'_>) -> Result<()> {
+        self.curve = Some(CurveBuilder {
+            id: required_attribute(start, "id")?,
+            ..Default::default()
+        });
+        Ok(())
+    }
+
+    fn start_surface(&mut self, start: &BytesStart<'_>) -> Result<()> {
+        self.surface = Some(SurfaceBuilder {
+            id: required_attribute(start, "id")?,
+            ..Default::default()
+        });
+        Ok(())
+    }
+
+    fn start_fude(&mut self, start: &BytesStart<'_>) -> Result<()> {
+        self.fude = Some(FudeBuilder {
+            id: required_attribute(start, "id")?,
+            ..Default::default()
+        });
+        Ok(())
+    }
+
+    fn finish_point(&mut self) -> Result<()> {
+        let point = match self.point.take() {
+            Some(point) => point,
+            None => return Ok(()),
+        };
+
+        if !point.saw_position {
+            return Err(Error::MissingElement("GM_Point.position".to_string()));
+        }
+
+        if !point.saw_direct_position {
+            return Err(Error::MissingElement("DirectPosition".to_string()));
+        }
+
+        let x = point
+            .x
+            .ok_or_else(|| Error::MissingElement("X".to_string()))?;
+        let y = point
+            .y
+            .ok_or_else(|| Error::MissingElement("Y".to_string()))?;
+
+        self.points.insert(point.id, Point::new(x, y));
+        Ok(())
+    }
+
+    fn finish_curve(&mut self) -> Result<()> {
+        let curve = match self.curve.take() {
+            Some(curve) => curve,
+            None => return Ok(()),
+        };
+
+        if !curve.saw_segment {
+            return Err(Error::MissingElement("GM_Curve.segment".to_string()));
+        }
+
+        if !curve.saw_first_column {
+            return Err(Error::MissingElement("GM_PointArray.column".to_string()));
+        }
+
+        let (x, y) = match curve.position_kind {
+            Some(CurvePositionKind::Direct) => {
+                let x = curve
+                    .direct_x
+                    .ok_or_else(|| Error::MissingElement("X".to_string()))?;
+                let y = curve
+                    .direct_y
+                    .ok_or_else(|| Error::MissingElement("Y".to_string()))?;
+                (x, y)
+            }
+            Some(CurvePositionKind::Indirect) => {
+                let idref = curve
+                    .indirect_ref
+                    .ok_or_else(|| Error::MissingElement("GM_Position.indirect".to_string()))?;
+                let point = self
+                    .points
+                    .get(&idref)
+                    .ok_or_else(|| Error::PointNotFound(idref.clone()))?;
+                (point.x(), point.y())
+            }
+            None => {
+                return Err(Error::MissingElement("GM_Position.*".to_string()));
+            }
+        };
+
+        let mut curve_point = Curve::new(y, x);
+        if let (Some(source_crs), Some(target_crs)) = (self.source_crs, self.target_crs) {
+            transform_curve_crs(&mut curve_point, source_crs, target_crs)?;
+        }
+
+        self.curves.insert(curve.id, curve_point);
+        Ok(())
+    }
+
+    fn finish_surface(&mut self) -> Result<()> {
+        let surface = match self.surface.take() {
+            Some(surface) => surface,
+            None => return Ok(()),
+        };
+
+        if !surface.saw_patch || !surface.saw_polygon {
+            return Err(Error::MissingElement("GM_Surface.patch".to_string()));
+        }
+
+        if !surface.saw_polygon_boundary || !surface.saw_surface_boundary {
+            return Err(Error::MissingElement("GM_SurfaceBoundary".to_string()));
+        }
+
+        if !surface.saw_exterior {
+            return Err(Error::MissingElement(
+                "GM_SurfaceBoundary.exterior".to_string(),
+            ));
+        }
+
+        let exterior_ring = LineString::from(surface.exterior_points);
+        let interior_rings = surface
+            .interior_points
+            .into_iter()
+            .map(LineString::from)
+            .collect::<Vec<_>>();
+
+        self.surfaces
+            .insert(surface.id, Polygon::new(exterior_ring, interior_rings));
+
+        Ok(())
+    }
+
+    fn finish_fude(&mut self) -> Result<()> {
+        let fude = match self.fude.take() {
+            Some(fude) => fude,
+            None => return Ok(()),
+        };
+
+        if !self.options.include_chikugai {
+            match fude.parcel_number.as_ref() {
+                Some(value) if value.contains("地区外") || value.contains("別図") => {
+                    return Ok(());
+                }
+                Some(_) => {}
+                None => return Err(Error::MissingElement("地番".to_string())),
+            }
+        }
+
+        let geometry = fude
+            .geometry_ref
+            .as_ref()
+            .and_then(|idref| self.surfaces.get(idref))
+            .cloned()
+            .ok_or_else(|| Error::MissingElement("geometry".to_string()))?;
+
+        let ooaza_code = fude
+            .ooaza_code
+            .ok_or_else(|| Error::MissingElement("大字コード".to_string()))?;
+        let chome_code = fude
+            .chome_code
+            .ok_or_else(|| Error::MissingElement("丁目コード".to_string()))?;
+        let koaza_code = fude
+            .koaza_code
+            .ok_or_else(|| Error::MissingElement("小字コード".to_string()))?;
+        let yobi_code = fude
+            .yobi_code
+            .ok_or_else(|| Error::MissingElement("予備コード".to_string()))?;
+        let parcel_number = fude
+            .parcel_number
+            .ok_or_else(|| Error::MissingElement("地番".to_string()))?;
+
+        let pop = point_on_polygon(&geometry)?;
+
+        self.features.push(Feature {
+            geometry,
+            props: FeatureProperties {
+                筆id: fude.id,
+                精度区分: fude.precision_class,
+                大字コード: ooaza_code,
+                丁目コード: chome_code,
+                小字コード: koaza_code,
+                予備コード: yobi_code,
+                大字名: fude.ooaza_name,
+                丁目名: fude.chome_name,
+                小字名: fude.koaza_name,
+                予備名: fude.yobi_name,
+                地番: parcel_number,
+                座標値種別: fude.coordinate_value_type,
+                筆界未定構成筆: fude.constituents,
+                代表点緯度: pop.y(),
+                代表点経度: pop.x(),
+            },
+        });
+
+        Ok(())
+    }
+}
+
+#[inline]
+fn local_name(name: &[u8]) -> &[u8] {
+    match name.iter().rposition(|&b| b == b':') {
+        Some(pos) => &name[pos + 1..],
+        None => name,
+    }
+}
+
+#[inline]
+fn name_to_string(name: &[u8]) -> String {
+    String::from_utf8_lossy(local_name(name)).into_owned()
+}
+
+#[inline]
+fn name_eq(name: &[u8], expected: &str) -> bool {
+    name == expected.as_bytes()
+}
+
+fn required_attribute(start: &BytesStart<'_>, attr_name: &str) -> Result<String> {
+    for attr in start.attributes().with_checks(false).flatten() {
+        if local_name(attr.key.as_ref()) == attr_name.as_bytes() {
+            return Ok(std::str::from_utf8(attr.value.as_ref())?.to_owned());
+        }
+    }
+
+    Err(Error::MissingAttribute {
+        element: name_to_string(start.name().as_ref()),
+        attribute: attr_name.to_string(),
     })
-}
-
-fn node_text(node: &Node, label: &str) -> Result<String> {
-    node.text()
-        .map(|text| text.to_string())
-        .ok_or_else(|| Error::MissingElement(label.to_string()))
-}
-
-fn child_text(node: &Node, label: &str) -> Result<String> {
-    let child = get_child_element(node, label)?;
-    node_text(&child, label)
-}
-
-fn parse_text_as_f64(node: &Node, label: &str) -> Result<f64> {
-    let text = node
-        .text()
-        .ok_or_else(|| Error::MissingElement(label.to_string()))?;
-    Ok(text.parse::<f64>()?)
-}
-
-fn parse_xy(node: &Node) -> Result<(f64, f64)> {
-    let mut x = None;
-    let mut y = None;
-
-    for child in node.children().filter(|child| child.is_element()) {
-        match child.tag_name().name() {
-            "X" => x = Some(parse_text_as_f64(&child, "X")?),
-            "Y" => y = Some(parse_text_as_f64(&child, "Y")?),
-            _ => {}
-        }
-    }
-
-    let x = x.ok_or_else(|| Error::MissingElement("X".to_string()))?;
-    let y = y.ok_or_else(|| Error::MissingElement("Y".to_string()))?;
-    Ok((x, y))
-}
-
-fn collect_ring_points<'a, 'd>(
-    boundary: &Node<'a, 'd>,
-    curves: &HashMap<&'a str, Curve>,
-) -> Result<Vec<Point>>
-where
-    'd: 'a,
-{
-    let mut ring_points = Vec::new();
-
-    for ring in boundary
-        .children()
-        .filter(|child| child.is_element() && has_name(child, "GM_Ring"))
-    {
-        for curve_ref in ring.children().filter(|child| child.is_element()) {
-            let idref = required_attribute(&curve_ref, "idref")?;
-            let curve = curves
-                .get(idref)
-                .ok_or_else(|| Error::PointNotFound(idref.to_string()))?;
-            ring_points.push(*curve);
-        }
-    }
-
-    Ok(ring_points)
-}
-
-fn parse_constituent_fude(node: &Node) -> 筆界未定構成筆 {
-    let mut constituent = 筆界未定構成筆::default();
-
-    for entry in node.children().filter(|child| child.is_element()) {
-        let tag_name = entry.tag_name().name();
-        let text = entry.text();
-        match tag_name {
-            "大字コード" => constituent.大字コード = text.unwrap_or("").to_owned(),
-            "丁目コード" => constituent.丁目コード = text.unwrap_or("").to_owned(),
-            "小字コード" => constituent.小字コード = text.unwrap_or("").to_owned(),
-            "予備コード" => constituent.予備コード = text.unwrap_or("").to_owned(),
-            "大字名" => constituent.大字名 = text.map(str::to_owned),
-            "丁目名" => constituent.丁目名 = text.map(str::to_owned),
-            "小字名" => constituent.小字名 = text.map(str::to_owned),
-            "予備名" => constituent.予備名 = text.map(str::to_owned),
-            "地番" => constituent.地番 = text.unwrap_or("").to_owned(),
-            _ => {}
-        }
-    }
-
-    constituent
 }
 
 fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
@@ -125,96 +1036,16 @@ fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
         .ok_or(Error::InteriorPointUnavailable)
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ParseOptions {
-    pub include_arbitrary_crs: bool,
-    pub include_chikugai: bool,
-}
-
-// --- Helper Functions ---
-fn get_child_element<'a, 'd>(node: &Node<'a, 'd>, name: &str) -> Result<Node<'a, 'd>>
-where
-    'd: 'a,
-{
-    node.children()
-        .find(|child| child.tag_name().name() == name)
-        .ok_or_else(|| Error::MissingElement(name.to_string()))
-}
-
-// -- Accessory parsing functions --
-fn parse_points<'a, 'd>(spatial_element: &Node<'a, 'd>) -> Result<HashMap<&'a str, Point>>
-where
-    'd: 'a,
-{
-    let mut points: HashMap<&'a str, Point> = HashMap::default();
-
-    for point in spatial_element
-        .children()
-        .filter(|child| child.is_element() && has_name(child, "GM_Point"))
-    {
-        let position_node = find_child_by_name(&point, "GM_Point.position")
-            .ok_or_else(|| Error::MissingElement("GM_Point.position".to_string()))?;
-        let direct_position = find_child_by_name(&position_node, "DirectPosition")
-            .ok_or_else(|| Error::MissingElement("DirectPosition".to_string()))?;
-        let (x, y) = parse_xy(&direct_position)?;
-        let point_id = required_attribute(&point, "id")?;
-        points.insert(point_id, Point::new(x, y));
-    }
-
-    Ok(points)
-}
-
-fn parse_curves<'a, 'd>(
-    spatial_element: &Node<'a, 'd>,
-    points: &HashMap<&'a str, Point>,
-) -> Result<HashMap<&'a str, Curve>>
-where
-    'd: 'a,
-{
-    let mut curves: HashMap<&'a str, Curve> = HashMap::default();
-
-    for curve in spatial_element
-        .children()
-        .filter(|child| child.is_element() && has_name(child, "GM_Curve"))
-    {
-        let curve_id = required_attribute(&curve, "id")?;
-
-        let segment = curve
-            .children()
-            .find(|child| child.is_element() && has_name(child, "GM_Curve.segment"))
-            .ok_or_else(|| Error::MissingElement("GM_Curve.segment".to_string()))?;
-
-        let column = find_child_by_name(&segment, "GM_LineString")
-            .and_then(|line| find_child_by_name(&line, "GM_LineString.controlPoint"))
-            .and_then(|control| find_child_by_name(&control, "GM_PointArray.column"))
-            .ok_or_else(|| Error::MissingElement("GM_PointArray.column".to_string()))?;
-
-        let position = column
-            .first_element_child()
-            .ok_or_else(|| Error::MissingElement("GM_Position.*".to_string()))?;
-
-        let (x, y) = match position.tag_name().name() {
-            "GM_Position.indirect" => {
-                let reference = position
-                    .first_element_child()
-                    .ok_or_else(|| Error::MissingElement("GM_Position.indirect".to_string()))?;
-                let idref = required_attribute(&reference, "idref")?;
-                let point = points
-                    .get(idref)
-                    .ok_or_else(|| Error::PointNotFound(idref.to_string()))?;
-                (point.x(), point.y())
-            }
-            "GM_Position.direct" => parse_xy(&position)?,
-            other => return Err(Error::UnexpectedElement(other.to_string())),
-        };
-
-        curves.insert(curve_id, Curve::new(y, x));
-    }
-
-    Ok(curves)
+#[inline]
+fn transform_curve_crs(curve: &mut Curve, source_crs: &Proj, target_crs: &Proj) -> Result<()> {
+    let mut point = curve.x_y();
+    proj4rs::transform::transform(source_crs, target_crs, &mut point)?;
+    *curve = Point::new(point.0.to_degrees(), point.1.to_degrees());
+    Ok(())
 }
 
 /// Transform all curves' coordinates from source_crs to target_crs in-place.
+#[cfg(test)]
 fn transform_curves_crs(
     curves: &mut HashMap<&str, Curve>,
     source_crs: &Proj,
@@ -225,170 +1056,10 @@ fn transform_curves_crs(
     }
 
     for curve in curves.values_mut() {
-        let mut point = curve.x_y();
-        proj4rs::transform::transform(source_crs, target_crs, &mut point)?;
-        *curve = Point::new(point.0.to_degrees(), point.1.to_degrees());
+        transform_curve_crs(curve, source_crs, target_crs)?;
     }
 
     Ok(())
-}
-
-fn parse_surfaces<'a, 'd>(
-    spatial_element: &Node<'a, 'd>,
-    curves: &HashMap<&'a str, Curve>,
-) -> Result<HashMap<&'a str, Surface>>
-where
-    'd: 'a,
-{
-    let mut surfaces: HashMap<&'a str, Surface> = HashMap::default();
-
-    for surface in spatial_element
-        .children()
-        .filter(|child| child.is_element() && has_name(child, "GM_Surface"))
-    {
-        let surface_id = required_attribute(&surface, "id")?;
-
-        let polygon = find_child_by_name(&surface, "GM_Surface.patch")
-            .and_then(|patch| find_child_by_name(&patch, "GM_Polygon"))
-            .ok_or_else(|| Error::MissingElement("GM_Surface.patch".to_string()))?;
-
-        let surface_boundary = find_child_by_name(&polygon, "GM_Polygon.boundary")
-            .and_then(|boundary| find_child_by_name(&boundary, "GM_SurfaceBoundary"))
-            .ok_or_else(|| Error::MissingElement("GM_SurfaceBoundary".to_string()))?;
-
-        let exterior = find_child_by_name(&surface_boundary, "GM_SurfaceBoundary.exterior")
-            .ok_or_else(|| Error::MissingElement("GM_SurfaceBoundary.exterior".to_string()))?;
-
-        let exterior_ring = LineString::from(collect_ring_points(&exterior, curves)?);
-
-        let mut interior_rings = Vec::new();
-        for interior in surface_boundary
-            .children()
-            .filter(|child| child.is_element() && has_name(child, "GM_SurfaceBoundary.interior"))
-        {
-            interior_rings.push(LineString::from(collect_ring_points(&interior, curves)?));
-        }
-
-        surfaces.insert(surface_id, Polygon::new(exterior_ring, interior_rings));
-    }
-
-    Ok(surfaces)
-}
-
-fn parse_features<'a, 'd>(
-    subject_elem: &Node<'a, 'd>,
-    surfaces: &HashMap<&'a str, Surface>,
-    options: &ParseOptions,
-) -> Result<Vec<Feature>>
-where
-    'd: 'a,
-{
-    let mut features: Vec<Feature> = Vec::new();
-
-    for fude in subject_elem
-        .children()
-        .filter(|child| child.is_element() && has_name(child, "筆"))
-    {
-        let fude_id = required_attribute(&fude, "id")?;
-        let mut geometry: Option<Polygon> = None;
-
-        let mut 精度区分 = None;
-        let mut 大字コード = None;
-        let mut 丁目コード = None;
-        let mut 小字コード = None;
-        let mut 予備コード = None;
-        let mut 大字名 = None;
-        let mut 丁目名 = None;
-        let mut 小字名 = None;
-        let mut 予備名 = None;
-        let mut 地番 = None;
-        let mut 座標値種別 = None;
-        let mut 筆界未定構成筆 = Vec::new();
-
-        for entry in fude.children().filter(|child| child.is_element()) {
-            let tag_name = entry.tag_name().name();
-            match tag_name {
-                "形状" => {
-                    let idref = required_attribute(&entry, "idref")?;
-                    geometry = surfaces.get(idref).cloned();
-                }
-                "精度区分" => 精度区分 = entry.text().map(str::to_owned),
-                "大字コード" => 大字コード = Some(entry.text().unwrap_or("").to_owned()),
-                "丁目コード" => 丁目コード = Some(entry.text().unwrap_or("").to_owned()),
-                "小字コード" => 小字コード = Some(entry.text().unwrap_or("").to_owned()),
-                "予備コード" => 予備コード = Some(entry.text().unwrap_or("").to_owned()),
-                "大字名" => 大字名 = entry.text().map(str::to_owned),
-                "丁目名" => 丁目名 = entry.text().map(str::to_owned),
-                "小字名" => 小字名 = entry.text().map(str::to_owned),
-                "予備名" => 予備名 = entry.text().map(str::to_owned),
-                "地番" => 地番 = Some(entry.text().unwrap_or("").to_owned()),
-                "座標値種別" => 座標値種別 = entry.text().map(str::to_owned),
-                "筆界未定構成筆" => 筆界未定構成筆.push(parse_constituent_fude(&entry)),
-                _ => {}
-            }
-        }
-
-        if !options.include_chikugai {
-            match 地番.as_ref() {
-                Some(value) if value.contains("地区外") || value.contains("別図") => continue,
-                Some(_) => {}
-                None => return Err(Error::MissingElement("地番".to_string())),
-            }
-        }
-
-        let geometry = geometry.ok_or_else(|| Error::MissingElement("geometry".to_string()))?;
-        let 大字コード =
-            大字コード.ok_or_else(|| Error::MissingElement("大字コード".to_string()))?;
-        let 丁目コード =
-            丁目コード.ok_or_else(|| Error::MissingElement("丁目コード".to_string()))?;
-        let 小字コード =
-            小字コード.ok_or_else(|| Error::MissingElement("小字コード".to_string()))?;
-        let 予備コード =
-            予備コード.ok_or_else(|| Error::MissingElement("予備コード".to_string()))?;
-        let 地番 = 地番.ok_or_else(|| Error::MissingElement("地番".to_string()))?;
-
-        let pop = point_on_polygon(&geometry)?;
-        features.push(Feature {
-            geometry,
-            props: FeatureProperties {
-                筆id: fude_id.to_owned(),
-                精度区分,
-                大字コード,
-                丁目コード,
-                小字コード,
-                予備コード,
-                大字名,
-                丁目名,
-                小字名,
-                予備名,
-                地番,
-                座標値種別,
-                筆界未定構成筆,
-                代表点緯度: pop.y(),
-                代表点経度: pop.x(),
-            },
-        });
-    }
-
-    Ok(features)
-}
-
-fn parse_base_properties(root: &Node) -> Result<CommonProperties> {
-    let map_name = child_text(root, "地図名")?;
-    let city_code = child_text(root, "市区町村コード")?;
-    let city_name = child_text(root, "市区町村名")?;
-    let crs = child_text(root, "座標系")?;
-    let crs_det = get_child_element(root, "測地系判別")
-        .ok()
-        .and_then(|elem| elem.text().map(|text| text.to_string()));
-
-    Ok(CommonProperties {
-        地図名: map_name,
-        市区町村コード: city_code,
-        市区町村名: city_name,
-        座標系: crs,
-        測地系判別: crs_det,
-    })
 }
 
 // --- Main Parsing Function ---
@@ -398,37 +1069,48 @@ pub fn parse_xml_content(
     options: &ParseOptions,
 ) -> Result<ParsedXML> {
     let file_name = file_name.to_string();
-    let doc = Document::parse(file_data)?;
-    let root = doc.root_element();
+    let mut parser = StreamParser::new(options);
+    let mut reader = Reader::from_str(file_data);
+    reader.config_mut().trim_text(false);
 
-    let common_props = parse_base_properties(&root)?;
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
 
-    let crs = get_proj(&common_props.座標系)?;
-    if crs.is_none() && !options.include_arbitrary_crs {
-        return Ok(ParsedXML {
-            file_name,
-            features: vec![],
-            common_props,
-        });
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(start) => {
+                parser.handle_start(&start, depth + 1)?;
+                if parser.skip_features {
+                    break;
+                }
+                depth += 1;
+            }
+            Event::Empty(start) => {
+                parser.handle_start(&start, depth + 1)?;
+                if parser.skip_features {
+                    break;
+                }
+
+                let start_name = start.name();
+                let name = local_name(start_name.as_ref());
+                parser.handle_end(name, depth + 1)?;
+                if parser.skip_features {
+                    break;
+                }
+            }
+            Event::End(end) => {
+                parser.handle_end(local_name(end.name().as_ref()), depth)?;
+                depth = depth.saturating_sub(1);
+            }
+            Event::Text(text) => parser.push_text_bytes(text.as_ref())?,
+            Event::CData(text) => parser.push_text_bytes(text.as_ref())?,
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
     }
 
-    let spatial_element = get_child_element(&root, "空間属性")?;
-    let points = parse_points(&spatial_element)?;
-    let mut curves = parse_curves(&spatial_element, &points)?;
-    if let Some(crs) = crs {
-        let tgt_crs = get_proj("WGS84")?.expect("WGS84 CRS not found");
-        transform_curves_crs(&mut curves, crs, tgt_crs)?;
-    }
-
-    let surfaces = parse_surfaces(&spatial_element, &curves)?;
-    let subject_elem = get_child_element(&root, "主題属性")?;
-
-    let features = parse_features(&subject_elem, &surfaces, options)?;
-    Ok(ParsedXML {
-        file_name,
-        features,
-        common_props,
-    })
+    parser.finish(file_name)
 }
 
 #[cfg(test)]

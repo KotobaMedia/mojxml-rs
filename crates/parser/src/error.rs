@@ -2,8 +2,8 @@
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("XML parsing error: {0}")]
-    Xml(#[from] roxmltree::Error),
+    #[error("XML stream parsing error: {0}")]
+    XmlStream(#[from] quick_xml::Error),
     #[error("Encoding error: {0}")]
     Encoding(#[from] std::str::Utf8Error),
     #[error("Missing required element: {0}")]

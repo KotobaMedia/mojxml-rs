@@ -16,10 +16,10 @@ geo-types = { workspace = true }
 geoparquet-batch-writer = { workspace = true, optional = true }
 geo = { workspace = true }
 proj4rs = "0.1.8"
-roxmltree = "0.21"
 serde = { workspace = true }
 thiserror = "2"
 rustc-hash = "2"
+quick-xml = "0.39"
 
 [dev-dependencies]
 criterion = { version = "0.7", features = ["html_reports"] }

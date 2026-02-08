@@ -3,7 +3,7 @@ use std::time::Duration;
 
 const XML_SAMPLE: &str = include_str!("../../../testdata/46505-3411-56.xml");
 
-fn roxmltree_parse() {
+fn quick_xml_parse() {
     let _ = mojxml_parser::parse_xml_content("46505-3411-56.xml", XML_SAMPLE, &Default::default())
         .unwrap();
 }
@@ -14,7 +14,7 @@ fn bench_main(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(15));
     group.warm_up_time(Duration::from_secs(5));
 
-    group.bench_function("roxmltree", |b| b.iter(roxmltree_parse));
+    group.bench_function("quick-xml-stream", |b| b.iter(quick_xml_parse));
 
     group.finish();
 }
