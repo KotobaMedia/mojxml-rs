@@ -9,6 +9,7 @@ type WorkerSuccessMessage = {
   status: "success";
   result: FeatureCollection;
   elapsedMs: number;
+  profile: WorkerParseProfile;
 };
 
 type WorkerErrorMessage = {
@@ -18,13 +19,60 @@ type WorkerErrorMessage = {
 
 type WorkerMessage = WorkerSuccessMessage | WorkerErrorMessage;
 
+type WorkerMemorySnapshot = {
+  wasmHeapBytes: number;
+  jsHeapUsedBytes?: number;
+  jsHeapTotalBytes?: number;
+  jsHeapLimitBytes?: number;
+};
+
+type WorkerParseProfile = {
+  xmlBytes: number;
+  decodeMs: number;
+  parseMs: number;
+  totalMs: number;
+  memoryBefore: WorkerMemorySnapshot;
+  memoryAfter: WorkerMemorySnapshot;
+};
+
+type ParseProfileSummary = {
+  samples: number;
+  maxXmlBytes: number;
+  maxWasmHeapBytes: number;
+};
+
 const MAP_CONTAINER_ID = "map";
 const GEOJSON_SOURCE_ID = "parsed-geojson";
 const POLYGON_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon`;
 const POLYGON_OUTLINE_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon-outline`;
 const POLYGON_LABEL_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon-label`;
 const BASE_STYLE_URL = "https://tiles.kmproj.com/styles/osm-ja-light.json";
-const PARSER_WORKER_CONCURRENCY = navigator.hardwareConcurrency || 2;
+const DEFAULT_PARSER_WORKER_CONCURRENCY = 2;
+const MAX_PARSER_WORKER_CONCURRENCY = 4;
+const WASM_WORKER_RECYCLE_THRESHOLD_BYTES = 192 * 1024 * 1024;
+const ENABLE_PROFILE_LOGS = new URLSearchParams(window.location.search).has("profile");
+
+const parseWorkerConcurrencyFromQuery = () => {
+  const queryValue = new URLSearchParams(window.location.search).get("workers");
+  if (!queryValue) {
+    return Math.min(
+      navigator.hardwareConcurrency || DEFAULT_PARSER_WORKER_CONCURRENCY,
+      DEFAULT_PARSER_WORKER_CONCURRENCY,
+    );
+  }
+
+  const requested = Number.parseInt(queryValue, 10);
+  if (!Number.isFinite(requested) || requested < 1) {
+    return Math.min(
+      navigator.hardwareConcurrency || DEFAULT_PARSER_WORKER_CONCURRENCY,
+      DEFAULT_PARSER_WORKER_CONCURRENCY,
+    );
+  }
+
+  return Math.min(requested, MAX_PARSER_WORKER_CONCURRENCY);
+};
+
+const PARSER_WORKER_CONCURRENCY = Math.max(1, parseWorkerConcurrencyFromQuery());
 
 class ParserWorkerPool {
   private idleWorkers: Worker[] = [];
@@ -73,6 +121,18 @@ class ParserWorkerPool {
 
     this.totalWorkers += 1;
     pending(this.createWorker());
+  }
+
+  disposeIdleWorkers() {
+    if (this.idleWorkers.length === 0) {
+      return;
+    }
+
+    for (const worker of this.idleWorkers) {
+      worker.terminate();
+    }
+    this.totalWorkers = Math.max(0, this.totalWorkers - this.idleWorkers.length);
+    this.idleWorkers.length = 0;
   }
 
   private createWorker() {
@@ -253,16 +313,17 @@ let mapInstance: maplibregl.Map | undefined;
 
 type XmlDocument = {
   fileName: string;
-  xml: string;
+  xmlBytes: Uint8Array;
 };
 
 type ParsedDocument = {
-  entry: XmlDocument;
+  fileName: string;
+  featureCount: number;
   result: WorkerSuccessMessage;
 };
 
 type FailedDocument = {
-  entry: XmlDocument;
+  fileName: string;
   error: unknown;
 };
 
@@ -273,7 +334,6 @@ const ZIP_MIME_TYPES = new Set([
   "multipart/x-zip",
 ]);
 
-const textDecoder = new TextDecoder();
 const ZIP_EXTENSION = ".zip";
 const XML_EXTENSION = ".xml";
 
@@ -295,6 +355,16 @@ const describeError = (error: unknown) => {
     return String(error);
   }
 };
+
+const formatBytesMiB = (bytes?: number) => {
+  if (bytes === undefined || bytes <= 0) {
+    return "n/a";
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+};
+
+const shouldRecycleWorker = (message: WorkerSuccessMessage) =>
+  message.profile.memoryAfter.wasmHeapBytes >= WASM_WORKER_RECYCLE_THRESHOLD_BYTES;
 
 const isZipFile = (file: File) => {
   const name = file.name.toLowerCase();
@@ -330,6 +400,9 @@ async function extractXmlDocumentsFromZip(
   }
 
   for (const [rawName, content] of Object.entries(entries)) {
+    // Drop references in the unzip object as soon as each entry is handled.
+    delete entries[rawName];
+
     const normalizedName = normalizeZipEntryName(rawName);
     if (!normalizedName || normalizedName.endsWith("/")) {
       continue;
@@ -350,11 +423,10 @@ async function extractXmlDocumentsFromZip(
 
     if (lowerName.endsWith(XML_EXTENSION)) {
       try {
-        const xml = textDecoder.decode(content);
         log?.(`unzipped ${fullPath}`);
-        xmlDocuments.push({ fileName: fullPath, xml });
+        xmlDocuments.push({ fileName: fullPath, xmlBytes: content });
       } catch (error) {
-        console.error(`Failed to decode XML document ${fullPath}:`, error);
+        console.error(`Failed to queue XML document ${fullPath}:`, error);
       }
     }
   }
@@ -364,7 +436,7 @@ async function extractXmlDocumentsFromZip(
 
 const parseXmlWithWorker = async (
   fileName: string,
-  xml: string,
+  xmlBytes: Uint8Array,
 ): Promise<WorkerSuccessMessage> => {
   const parserWorker = await parserWorkerPool.acquire();
 
@@ -377,7 +449,11 @@ const parseXmlWithWorker = async (
     const handleMessage = (event: MessageEvent<WorkerMessage>) => {
       cleanup();
       if (event.data.status === "success") {
-        parserWorkerPool.release(parserWorker);
+        if (shouldRecycleWorker(event.data)) {
+          parserWorkerPool.invalidate(parserWorker);
+        } else {
+          parserWorkerPool.release(parserWorker);
+        }
         resolve(event.data);
       } else {
         parserWorkerPool.release(parserWorker);
@@ -394,10 +470,15 @@ const parseXmlWithWorker = async (
     parserWorker.addEventListener("message", handleMessage);
     parserWorker.addEventListener("error", handleError);
 
+    const transferableBytes =
+      xmlBytes.byteOffset === 0 && xmlBytes.byteLength === xmlBytes.buffer.byteLength
+        ? xmlBytes
+        : xmlBytes.slice();
+
     parserWorker.postMessage({
       fileName,
-      xml,
-    });
+      xmlBytes: transferableBytes,
+    }, [transferableBytes.buffer]);
   });
 };
 
@@ -409,37 +490,79 @@ const parseXmlDocumentsWithWorker = async (
   },
 ) => {
   const startTime = performance.now();
-  const settled = await mapLimit(
-    entries,
-    PARSER_WORKER_CONCURRENCY,
-    async (entry: XmlDocument): Promise<ParsedDocument | FailedDocument> => {
-      console.log("starting parse", entry.fileName);
-      try {
-        const result = await parseXmlWithWorker(entry.fileName, entry.xml);
-        const success: ParsedDocument = { entry, result };
-        callbacks?.onSuccess?.(success);
-        return success;
-      } catch (error) {
-        const failure: FailedDocument = { entry, error };
-        callbacks?.onFailure?.(failure);
-        return failure;
+  const failures: FailedDocument[] = [];
+  const mergedFeatures: FeatureCollection["features"] = [];
+  let successCount = 0;
+  let totalFeatures = 0;
+  const profileSummary: ParseProfileSummary = {
+    samples: 0,
+    maxXmlBytes: 0,
+    maxWasmHeapBytes: 0,
+  };
+
+  await mapLimit(entries, PARSER_WORKER_CONCURRENCY, async (entry: XmlDocument) => {
+    try {
+      const result = await parseXmlWithWorker(entry.fileName, entry.xmlBytes);
+      const features = result.result.features;
+      if (!Array.isArray(features)) {
+        throw new Error(
+          `Worker returned malformed FeatureCollection for ${entry.fileName} (features is not an array)`,
+        );
       }
-    },
-  );
+
+      const featureCount = features.length;
+      for (const feature of features) {
+        mergedFeatures.push(feature);
+      }
+      features.length = 0;
+
+      successCount += 1;
+      totalFeatures += featureCount;
+      profileSummary.samples += 1;
+      profileSummary.maxXmlBytes = Math.max(profileSummary.maxXmlBytes, result.profile.xmlBytes);
+      profileSummary.maxWasmHeapBytes = Math.max(
+        profileSummary.maxWasmHeapBytes,
+        result.profile.memoryAfter.wasmHeapBytes,
+      );
+
+      const success: ParsedDocument = {
+        fileName: entry.fileName,
+        featureCount,
+        result,
+      };
+      if (ENABLE_PROFILE_LOGS) {
+        console.debug("parse-profile", success.fileName, success.result.profile);
+      }
+      callbacks?.onSuccess?.(success);
+    } catch (error) {
+      const failure: FailedDocument = { fileName: entry.fileName, error };
+      failures.push(failure);
+      callbacks?.onFailure?.(failure);
+    } finally {
+      // Release large buffers as soon as they are no longer needed.
+      entry.xmlBytes = new Uint8Array(0);
+    }
+
+    return undefined;
+  });
 
   const totalElapsedMs = performance.now() - startTime;
-  const successes: ParsedDocument[] = [];
-  const failures: FailedDocument[] = [];
+  const collection =
+    successCount > 0
+      ? ({
+          type: "FeatureCollection",
+          features: mergedFeatures,
+        } as FeatureCollection)
+      : undefined;
 
-  for (const item of settled) {
-    if ("result" in item) {
-      successes.push(item);
-    } else {
-      failures.push(item);
-    }
-  }
-
-  return { successes, failures, totalElapsedMs };
+  return {
+    collection,
+    failures,
+    successCount,
+    totalFeatures,
+    totalElapsedMs,
+    profileSummary,
+  };
 };
 
 async function main() {
@@ -534,35 +657,22 @@ async function main() {
   };
 
   const summarizeResults = (
-    successes: ParsedDocument[],
+    successCount: number,
     failures: FailedDocument[],
+    totalFeatures: number,
     totalElapsedMs: number,
   ) => {
-    const totalFeatures = successes.reduce(
-      (sum, item) => sum + item.result.result.features.length,
-      0,
-    );
-
-    if (successes.length === 0) {
+    if (successCount === 0) {
       const failureMessages = failures
-        .map((failure) => `${failure.entry.fileName}: ${describeError(failure.error)}`)
+        .map((failure) => `${failure.fileName}: ${describeError(failure.error)}`)
         .join(" • ");
-      return {
-        message:
-          failures.length === 0
-            ? "No XML documents were processed."
-            : `Failed to parse XML • ${failureMessages}`,
-        collection: undefined,
-      };
+      return failures.length === 0
+        ? "No XML documents were processed."
+        : `Failed to parse XML • ${failureMessages}`;
     }
 
-    const mergedCollection: FeatureCollection = {
-      type: "FeatureCollection",
-      features: successes.flatMap((item) => item.result.result.features ?? []),
-    };
-
     const summaryParts = [
-      `Parsed ${successes.length} XML file${successes.length === 1 ? "" : "s"}`,
+      `Parsed ${successCount} XML file${successCount === 1 ? "" : "s"}`,
       `Total ${totalFeatures} feature${totalFeatures === 1 ? "" : "s"}`,
     ];
 
@@ -572,15 +682,12 @@ async function main() {
 
     if (failures.length > 0) {
       const failureSummary = failures
-        .map((failure) => `${failure.entry.fileName}: ${describeError(failure.error)}`)
+        .map((failure) => `${failure.fileName}: ${describeError(failure.error)}`)
         .join(" • ");
       summaryParts.push(`Failed ${failures.length} • ${failureSummary}`);
     }
 
-    return {
-      message: summaryParts.join(" • "),
-      collection: mergedCollection,
-    };
+    return summaryParts.join(" • ");
   };
 
   const handleXmlDocuments = async (documents: XmlDocument[], originName: string) => {
@@ -593,29 +700,43 @@ async function main() {
       `Parsing ${documents.length} XML file${documents.length === 1 ? "" : "s"} from ${originName}...`,
     );
 
-    const { successes, failures, totalElapsedMs } = await parseXmlDocumentsWithWorker(
-      documents,
-      {
-        onSuccess: (parsed) => {
-          const featureCount = parsed.result.result.features.length;
-          appendStatus(
-            `Processed ${parsed.entry.fileName}: ${featureCount} feature${
-              featureCount === 1 ? "" : "s"
-            } in ${parsed.result.elapsedMs.toFixed(2)} ms`,
-          );
-        },
-        onFailure: (failed) => {
-          appendStatus(`Failed ${failed.entry.fileName}: ${describeError(failed.error)}`);
-        },
+    const {
+      collection,
+      failures,
+      successCount,
+      totalFeatures,
+      totalElapsedMs,
+      profileSummary,
+    } = await parseXmlDocumentsWithWorker(documents, {
+      onSuccess: (parsed) => {
+        appendStatus(
+          `Processed ${parsed.fileName}: ${parsed.featureCount} feature${
+            parsed.featureCount === 1 ? "" : "s"
+          } in ${parsed.result.elapsedMs.toFixed(2)} ms`,
+        );
       },
-    );
-    const { message, collection } = summarizeResults(successes, failures, totalElapsedMs);
+      onFailure: (failed) => {
+        appendStatus(`Failed ${failed.fileName}: ${describeError(failed.error)}`);
+      },
+    });
+
+    const message = summarizeResults(successCount, failures, totalFeatures, totalElapsedMs);
 
     if (collection) {
       updateMapWithGeoJson(collection);
       prepareGeoJsonDownload(collection, originName);
     }
+
+    if (profileSummary.samples > 0) {
+      appendStatus(
+        `Peak worker memory • XML ${formatBytesMiB(profileSummary.maxXmlBytes)} • WASM ${formatBytesMiB(
+          profileSummary.maxWasmHeapBytes,
+        )}`,
+      );
+    }
+
     appendStatus(message);
+    parserWorkerPool.disposeIdleWorkers();
   };
 
   const handleFile = async (file: File) => {
@@ -623,20 +744,22 @@ async function main() {
     resetStatus(`Reading ${file.name}...`);
     try {
       if (isZipFile(file)) {
-        const arrayBuffer = await file.arrayBuffer();
-        replaceLastStatus(`Read ${file.name} (${arrayBuffer.byteLength} bytes); extracting...`);
+        let archiveBytes = new Uint8Array(await file.arrayBuffer());
+        replaceLastStatus(`Read ${file.name} (${archiveBytes.byteLength} bytes); extracting...`);
         const documents = await extractXmlDocumentsFromZip(
-          new Uint8Array(arrayBuffer),
+          archiveBytes,
           file.name,
           appendStatus,
         );
+        archiveBytes = new Uint8Array(0);
         await handleXmlDocuments(documents, file.name);
+        documents.length = 0;
         return;
       }
 
-      const text = await file.text();
-      replaceLastStatus(`Read ${file.name} (${text.length} chars).`);
-      await handleXmlDocuments([{ fileName: file.name, xml: text }], file.name);
+      const xmlBytes = new Uint8Array(await file.arrayBuffer());
+      replaceLastStatus(`Read ${file.name} (${xmlBytes.byteLength} bytes).`);
+      await handleXmlDocuments([{ fileName: file.name, xmlBytes }], file.name);
     } catch (error) {
       console.error("Failed to process file:", error);
       appendStatus(`Error processing ${file.name}: ${describeError(error)}`);
