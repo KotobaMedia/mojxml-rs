@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "mojxml-parser"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "geo",
@@ -1403,7 +1403,7 @@ dependencies = [
 
 [[package]]
 name = "mojxml-reader"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "thiserror 2.0.18",
  "zip",
@@ -1411,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "mojxml-rs"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1436,7 +1436,7 @@ dependencies = [
 
 [[package]]
 name = "mojxml-wasm"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "geojson",
  "mojxml-parser",

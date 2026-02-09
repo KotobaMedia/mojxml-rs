@@ -11,7 +11,7 @@ resolver = "3"
 description = "Tools for processing MOJ-XML cadastral data"
 repository = "https://github.com/KotobaMedia/mojxml-rs"
 authors = ["Keitaroh Kobayashi <keita@kotobamedia.com>"]
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 
