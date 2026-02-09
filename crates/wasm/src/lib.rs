@@ -1,8 +1,9 @@
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
 // use web_sys::console;
 
 #[wasm_bindgen]
-pub fn parse_xml_content(file_name: &str, xml_content: &str) -> Result<String, JsValue> {
+pub fn parse_xml_content(file_name: &str, xml_content: &str) -> Result<JsValue, JsValue> {
     let parse_options = mojxml_parser::ParseOptions {
         include_arbitrary_crs: false,
         include_chikugai: false,
@@ -42,6 +43,7 @@ pub fn parse_xml_content(file_name: &str, xml_content: &str) -> Result<String, J
         foreign_members: None,
     };
 
-    serde_json::to_string(&geojson)
+    geojson
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
         .map_err(|err| JsValue::from_str(&format!("Error serializing GeoJSON: {err}")))
 }
