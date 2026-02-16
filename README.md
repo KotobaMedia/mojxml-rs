@@ -37,6 +37,7 @@ Arguments:
 
 Options:
   -a, --arbitrary            Include features from arbitrary coordinate systems (unmapped files) ("任意座標系")
+  -A, --only-arbitrary       Include only features from arbitrary coordinate systems ("任意座標系"). This ignores features from globally mapped coordinate systems
   -c, --chikugai             Include features marked as outside district ("地区外") or separate map ("別図"). You probably don't need this
   -v, --verbose              Enable logging. Will log to mojxml.log in the current directory
   -t, --temp-dir <TEMP_DIR>  Optional temporary directory for unzipping files. If not specified, the default temporary directory will be used. Use this option if your /tmp directory doesn't have enough space

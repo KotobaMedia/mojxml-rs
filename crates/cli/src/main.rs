@@ -30,6 +30,11 @@ struct Cli {
     #[arg(short, long, default_value_t = false)]
     arbitrary: bool,
 
+    /// Include only features from arbitrary coordinate systems ("任意座標系").
+    /// This ignores features from globally mapped coordinate systems.
+    #[arg(short = 'A', long, default_value_t = false)]
+    only_arbitrary: bool,
+
     /// Include features marked as outside district ("地区外") or separate map ("別図").
     /// You probably don't need this.
     #[arg(short, long, default_value_t = false)]
@@ -64,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let parse_options = ParseOptions {
         include_arbitrary_crs: cli.arbitrary,
+        include_only_arbitrary_crs: cli.only_arbitrary,
         include_chikugai: cli.chikugai,
     };
 
