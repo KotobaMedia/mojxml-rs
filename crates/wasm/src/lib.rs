@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 pub fn parse_xml_content(file_name: &str, xml_content: &str) -> Result<JsValue, JsValue> {
     let parse_options = mojxml_parser::ParseOptions {
         include_arbitrary_crs: false,
+        include_only_arbitrary_crs: false,
         include_chikugai: false,
     };
     let parsed = mojxml_parser::parse_xml_content(file_name, xml_content, &parse_options);

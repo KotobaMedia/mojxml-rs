@@ -16,6 +16,7 @@ type Surface = Polygon;
 #[derive(Debug, Clone, Default)]
 pub struct ParseOptions {
     pub include_arbitrary_crs: bool,
+    pub include_only_arbitrary_crs: bool,
     pub include_chikugai: bool,
 }
 
@@ -234,12 +235,16 @@ impl<'a> StreamParser<'a> {
 
         match source_crs {
             Some(source_crs) => {
-                let target_crs = get_proj("WGS84")?.expect("WGS84 CRS not found");
-                self.source_crs = Some(source_crs);
-                self.target_crs = Some(target_crs);
+                if self.options.include_only_arbitrary_crs {
+                    self.skip_features = true;
+                } else {
+                    let target_crs = get_proj("WGS84")?.expect("WGS84 CRS not found");
+                    self.source_crs = Some(source_crs);
+                    self.target_crs = Some(target_crs);
+                }
             }
             None => {
-                if !self.options.include_arbitrary_crs {
+                if !self.options.include_arbitrary_crs && !self.options.include_only_arbitrary_crs {
                     self.skip_features = true;
                 }
             }
@@ -1185,6 +1190,7 @@ mod tests {
         let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
         let options = ParseOptions {
             include_arbitrary_crs: true,
+            include_only_arbitrary_crs: false,
             include_chikugai: true,
         };
         let ParsedXML {
@@ -1217,6 +1223,7 @@ mod tests {
         let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
         let options = ParseOptions {
             include_arbitrary_crs: true,
+            include_only_arbitrary_crs: false,
             include_chikugai: true,
         };
         let ParsedXML {
@@ -1271,6 +1278,7 @@ mod tests {
         let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
         let options = ParseOptions {
             include_arbitrary_crs: false,
+            include_only_arbitrary_crs: false,
             include_chikugai: false,
         };
         let ParsedXML {
@@ -1285,5 +1293,28 @@ mod tests {
             let is_inside = feature.geometry.contains(&rep_point);
             assert!(is_inside, "Representative point is outside of the polygon");
         }
+    }
+
+    #[test]
+    fn test_parse_only_arbitrary_should_skip_mapped_crs_data() {
+        let xml_path = testdata_path().join("46505-3411-56.xml");
+        let xml_temp = fs::read_to_string(xml_path).expect("Failed to read XML file");
+        let options = ParseOptions {
+            include_arbitrary_crs: false,
+            include_only_arbitrary_crs: true,
+            include_chikugai: true,
+        };
+        let ParsedXML {
+            file_name: _,
+            features,
+            common_props,
+        } = parse_xml_content("46505-3411-56.xml", &xml_temp, &options)
+            .expect("Failed to parse XML");
+
+        assert_eq!(common_props.座標系, "公共座標2系");
+        assert!(
+            features.is_empty(),
+            "Mapped CRS data should be ignored when include_only_arbitrary_crs is enabled"
+        );
     }
 }
