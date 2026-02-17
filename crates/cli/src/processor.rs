@@ -1,4 +1,4 @@
-use crate::writer::make_writer_by_ext;
+use crate::writer::{WriterOptions, make_writer_by_ext_with_options};
 use anyhow::Result;
 use crossbeam_channel::{bounded, unbounded};
 use indicatif::{MultiProgress, ProgressStyle};
@@ -32,12 +32,13 @@ pub fn process_files(
     output_path: &Path,
     src_files: Vec<PathBuf>,
     parse_options: ParseOptions,
+    writer_options: WriterOptions,
 ) -> Result<usize> {
     let input_file_count = src_files.len();
     let cpu_count = num_cpus::get().max(1);
     let (zip_workers, parse_workers) = worker_counts(cpu_count, input_file_count);
-    let parser_queue_capacity = (parse_workers * 2).clamp(4, 32);
-    let writer_queue_capacity = (parse_workers * 2).clamp(2, 8);
+    let parser_queue_capacity = (parse_workers * 3).clamp(8, 64);
+    let writer_queue_capacity = (parse_workers * 3).clamp(8, 32);
 
     let m = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::stdout_with_hz(2));
     let sty = ProgressStyle::with_template(
@@ -275,7 +276,7 @@ pub fn process_files(
         let write_batches_done = write_batches_done.clone();
         let stage_metrics = stage_metrics.clone();
         handles.push(thread::spawn(move || {
-            let mut writer = make_writer_by_ext(&output_path).unwrap();
+            let mut writer = make_writer_by_ext_with_options(&output_path, writer_options).unwrap();
             while let Ok(parsed_xml) = writer_rx.recv() {
                 debug!("[OUT] Adding features from file: {}", parsed_xml.file_name);
                 let features_in_batch = parsed_xml.features.len();

@@ -13,7 +13,8 @@ use mojxml_parser::ParseOptions;
 use std::{
     fs::{self, File},
     path::PathBuf,
-}; // Import ParseOptions
+};
+use writer::WriterOptions;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -49,6 +50,11 @@ struct Cli {
     /// Use this option if your /tmp directory doesn't have enough space.
     #[arg(short, long)]
     temp_dir: Option<PathBuf>,
+
+    /// Disable FlatGeobuf spatial index generation.
+    /// Has effect only when output extension is `.fgb`.
+    #[arg(long, default_value_t = false)]
+    fgb_no_index: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,10 +78,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_only_arbitrary_crs: cli.only_arbitrary,
         include_chikugai: cli.chikugai,
     };
+    let writer_options = WriterOptions {
+        fgb_write_index: !cli.fgb_no_index,
+    };
 
     println!("Starting processing files...");
 
-    let file_count = processor::process_files(&cli.dst_file, cli.src_files, parse_options)?;
+    let file_count =
+        processor::process_files(&cli.dst_file, cli.src_files, parse_options, writer_options)?;
 
     println!("Finished processing {} XML file(s).", file_count);
     println!("Destination: {}", cli.dst_file.display());
