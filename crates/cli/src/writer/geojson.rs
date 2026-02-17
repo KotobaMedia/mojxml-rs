@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use geojson::GeoJson;
+use geojson::{Geometry, Value};
 use serde::Serialize;
 
 use mojxml_parser::{CommonProperties, FeatureProperties, ParsedXML};
@@ -25,24 +25,20 @@ impl crate::writer::shared::Writer for GeoJsonWriter {
     }
 
     fn add_xml_features(&mut self, parsed: ParsedXML) -> Result<()> {
+        let shared = &parsed.common_props;
         for feature in &parsed.features {
-            let props = OutputProps {
-                shared: &parsed.common_props,
-                feature: &feature.props,
+            // Stream one feature per line directly to the buffered writer to avoid
+            // intermediate serde_json::Value/Object and String allocations.
+            let output_feature = OutputFeature {
+                feature_type: "Feature",
+                geometry: Geometry::new(Value::from(&feature.geometry)),
+                properties: OutputProps {
+                    shared,
+                    feature: &feature.props,
+                },
             };
-            let props = match serde_json::to_value(&props)? {
-                serde_json::Value::Object(map) => map,
-                _ => panic!("expected object"),
-            };
-            let gf = GeoJson::Feature(geojson::Feature {
-                id: None,
-                bbox: None,
-                geometry: Some(geojson::Value::from(&feature.geometry).into()),
-                properties: Some(props),
-                foreign_members: None,
-            });
 
-            self.bufwrite.write_all(gf.to_string().as_bytes())?;
+            serde_json::to_writer(&mut self.bufwrite, &output_feature)?;
             self.bufwrite.write_all(b"\n")?;
         }
         Ok(())
@@ -60,4 +56,12 @@ struct OutputProps<'a> {
     shared: &'a CommonProperties,
     #[serde(flatten)]
     feature: &'a FeatureProperties,
+}
+
+#[derive(Serialize)]
+struct OutputFeature<'a> {
+    #[serde(rename = "type")]
+    feature_type: &'static str,
+    geometry: Geometry,
+    properties: OutputProps<'a>,
 }

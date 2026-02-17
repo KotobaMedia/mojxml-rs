@@ -21,78 +21,7 @@ pub struct FlatGeobufWriter<'a> {
 
 impl<'a> crate::writer::shared::Writer for FlatGeobufWriter<'a> {
     fn new(output_path: &Path) -> Result<Self> {
-        let file = File::create(output_path)?;
-        let writer = BufWriter::new(file);
-
-        let mut fgb = FgbWriter::create_with_options(
-            "mojxml",
-            GeometryType::MultiPolygon,
-            FgbWriterOptions {
-                crs: FgbCrs {
-                    code: 4326,
-                    ..Default::default()
-                },
-                write_index: true,
-                ..Default::default()
-            },
-        )?;
-        fgb.add_column("地図名", ColumnType::String, |_, _| {});
-        fgb.add_column("市区町村コード", ColumnType::String, |_, _| {});
-        fgb.add_column("市区町村名", ColumnType::String, |_, _| {});
-        fgb.add_column("座標系", ColumnType::String, |_, _| {});
-        fgb.add_column("測地系判別", ColumnType::String, |_, col| {
-            col.nullable = true;
-        });
-        fgb.add_column("筆id", ColumnType::String, |_, _| {});
-        fgb.add_column("精度区分", ColumnType::String, |_, col| {
-            col.nullable = true;
-        });
-        fgb.add_column("大字コード", ColumnType::String, |_, col| {
-            col.nullable = false;
-        });
-        fgb.add_column("丁目コード", ColumnType::String, |_, col| {
-            col.nullable = false;
-        });
-        fgb.add_column("小字コード", ColumnType::String, |_, col| {
-            col.nullable = false;
-        });
-        fgb.add_column("予備コード", ColumnType::String, |_, col| {
-            col.nullable = false;
-        });
-        fgb.add_column("大字名", ColumnType::String, |_, col| {
-            col.nullable = true;
-        });
-        fgb.add_column("丁目名", ColumnType::String, |_, col| {
-            col.nullable = true;
-        });
-        fgb.add_column("小字名", ColumnType::String, |_, col| {
-            col.nullable = true;
-        });
-        fgb.add_column("予備名", ColumnType::String, |_, col| {
-            col.nullable = true;
-        });
-        fgb.add_column("地番", ColumnType::String, |_, col| {
-            col.nullable = false;
-        });
-        fgb.add_column("座標値種別", ColumnType::String, |_, col| {
-            col.nullable = true;
-        });
-        fgb.add_column("筆界未定構成筆", ColumnType::String, |_, col| {
-            col.nullable = true;
-        });
-        fgb.add_column("代表点緯度", ColumnType::Double, |_, col| {
-            col.nullable = false;
-        });
-        fgb.add_column("代表点経度", ColumnType::Double, |_, col| {
-            col.nullable = false;
-        });
-
-        Ok(FlatGeobufWriter {
-            fgb,
-            writer,
-            output_path: output_path.to_path_buf(),
-            has_features: false,
-        })
+        Self::new_with_write_index(output_path, true)
     }
 
     fn add_xml_features(&mut self, parsed: ParsedXML) -> Result<()> {
@@ -228,5 +157,82 @@ impl<'a> crate::writer::shared::Writer for FlatGeobufWriter<'a> {
             }
             Ok(false)
         }
+    }
+}
+
+impl<'a> FlatGeobufWriter<'a> {
+    pub(super) fn new_with_write_index(output_path: &Path, write_index: bool) -> Result<Self> {
+        let file = File::create(output_path)?;
+        let writer = BufWriter::new(file);
+
+        let mut fgb = FgbWriter::create_with_options(
+            "mojxml",
+            GeometryType::MultiPolygon,
+            FgbWriterOptions {
+                crs: FgbCrs {
+                    code: 4326,
+                    ..Default::default()
+                },
+                write_index,
+                ..Default::default()
+            },
+        )?;
+        fgb.add_column("地図名", ColumnType::String, |_, _| {});
+        fgb.add_column("市区町村コード", ColumnType::String, |_, _| {});
+        fgb.add_column("市区町村名", ColumnType::String, |_, _| {});
+        fgb.add_column("座標系", ColumnType::String, |_, _| {});
+        fgb.add_column("測地系判別", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("筆id", ColumnType::String, |_, _| {});
+        fgb.add_column("精度区分", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("大字コード", ColumnType::String, |_, col| {
+            col.nullable = false;
+        });
+        fgb.add_column("丁目コード", ColumnType::String, |_, col| {
+            col.nullable = false;
+        });
+        fgb.add_column("小字コード", ColumnType::String, |_, col| {
+            col.nullable = false;
+        });
+        fgb.add_column("予備コード", ColumnType::String, |_, col| {
+            col.nullable = false;
+        });
+        fgb.add_column("大字名", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("丁目名", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("小字名", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("予備名", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("地番", ColumnType::String, |_, col| {
+            col.nullable = false;
+        });
+        fgb.add_column("座標値種別", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("筆界未定構成筆", ColumnType::String, |_, col| {
+            col.nullable = true;
+        });
+        fgb.add_column("代表点緯度", ColumnType::Double, |_, col| {
+            col.nullable = false;
+        });
+        fgb.add_column("代表点経度", ColumnType::Double, |_, col| {
+            col.nullable = false;
+        });
+
+        Ok(FlatGeobufWriter {
+            fgb,
+            writer,
+            output_path: output_path.to_path_buf(),
+            has_features: false,
+        })
     }
 }

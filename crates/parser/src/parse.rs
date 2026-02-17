@@ -1076,13 +1076,14 @@ pub fn parse_xml_content(
     let file_name = file_name.to_string();
     let mut parser = StreamParser::new(options);
     let mut reader = Reader::from_str(file_data);
+    // We parse trusted MOJ XML input; disabling end-tag matching removes per-end-event comparisons.
+    reader.config_mut().check_end_names = false;
     reader.config_mut().trim_text(false);
 
-    let mut buf = Vec::new();
     let mut depth = 0usize;
 
     loop {
-        match reader.read_event_into(&mut buf)? {
+        match reader.read_event()? {
             Event::Start(start) => {
                 parser.handle_start(&start, depth + 1)?;
                 if parser.skip_features {
@@ -1112,7 +1113,6 @@ pub fn parse_xml_content(
             Event::Eof => break,
             _ => {}
         }
-        buf.clear();
     }
 
     parser.finish(file_name)

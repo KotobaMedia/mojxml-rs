@@ -8,6 +8,19 @@ use std::path::Path;
 
 use shared::Writer;
 
+#[derive(Debug, Clone, Copy)]
+pub struct WriterOptions {
+    pub fgb_write_index: bool,
+}
+
+impl Default for WriterOptions {
+    fn default() -> Self {
+        Self {
+            fgb_write_index: true,
+        }
+    }
+}
+
 // Helper to lift `new` into a boxed factory fn.
 pub trait Boxable: Writer + Sized + 'static {
     fn boxed_new(path: &Path) -> Result<Box<dyn Writer>> {
@@ -34,9 +47,17 @@ pub fn make_writer(id: &str, path: &Path) -> Result<Box<dyn Writer>> {
     bail!("unknown writer id: {id}")
 }
 
-/// Make a Writer based on the file extension of the output path.
-pub fn make_writer_by_ext(path: &Path) -> Result<Box<dyn Writer>> {
+/// Make a Writer based on the file extension of the output path and writer options.
+pub fn make_writer_by_ext_with_options(
+    path: &Path,
+    options: WriterOptions,
+) -> Result<Box<dyn Writer>> {
     if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+        if ext == "fgb" {
+            return Ok(Box::new(
+                flatgeobuf::FlatGeobufWriter::new_with_write_index(path, options.fgb_write_index)?,
+            ));
+        }
         return make_writer(ext, path);
     }
     bail!("cannot determine writer from path: {}", path.display())

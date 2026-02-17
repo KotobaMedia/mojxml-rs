@@ -1,27 +1,44 @@
-use crate::writer::make_writer_by_ext;
+use crate::writer::{WriterOptions, make_writer_by_ext_with_options};
 use anyhow::Result;
 use crossbeam_channel::{bounded, unbounded};
 use indicatif::{MultiProgress, ProgressStyle};
-use log::{debug, error};
+use log::{debug, error, info};
 use mojxml_parser::{ParseOptions, ParsedXML, parse_xml_content};
 use mojxml_reader::iter_xml_contents;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+#[derive(Default)]
+struct StageMetrics {
+    read_ns: AtomicU64,
+    parse_ns: AtomicU64,
+    write_ns: AtomicU64,
+    flush_ns: AtomicU64,
+    parser_queue_wait_ns: AtomicU64,
+    writer_queue_wait_ns: AtomicU64,
+    input_xml_bytes: AtomicU64,
+    parsed_ok_docs: AtomicUsize,
+    parse_error_docs: AtomicUsize,
+    written_batches: AtomicUsize,
+    written_features: AtomicUsize,
+    write_error_batches: AtomicUsize,
+}
 
 pub fn process_files(
     output_path: &Path,
     src_files: Vec<PathBuf>,
     parse_options: ParseOptions,
+    writer_options: WriterOptions,
 ) -> Result<usize> {
     let input_file_count = src_files.len();
     let cpu_count = num_cpus::get().max(1);
     let (zip_workers, parse_workers) = worker_counts(cpu_count, input_file_count);
-    let parser_queue_capacity = (parse_workers * 2).clamp(4, 32);
-    let writer_queue_capacity = (parse_workers * 2).clamp(2, 8);
+    let parser_queue_capacity = (parse_workers * 3).clamp(8, 64);
+    let writer_queue_capacity = (parse_workers * 3).clamp(8, 32);
 
     let m = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::stdout_with_hz(2));
     let sty = ProgressStyle::with_template(
@@ -39,6 +56,7 @@ pub fn process_files(
     let xml_docs_done = Arc::new(AtomicUsize::new(0));
     let write_batches_total = Arc::new(AtomicUsize::new(0));
     let write_batches_done = Arc::new(AtomicUsize::new(0));
+    let stage_metrics = Arc::new(StageMetrics::default());
 
     // Input path channels (.xml or .zip)
     let (input_tx, input_rx) = unbounded::<PathBuf>();
@@ -153,12 +171,25 @@ pub fn process_files(
         let xml_document_count = xml_document_count.clone();
         let input_files_done = input_files_done.clone();
         let xml_docs_total = xml_docs_total.clone();
+        let stage_metrics = stage_metrics.clone();
         handles.push(thread::spawn(move || {
             while let Ok(path) = input_rx.recv() {
                 debug!("[ZIP {:>2}] Opening file: {}", i, path.display());
-                for item in iter_xml_contents(&path) {
+                let mut xml_iter = iter_xml_contents(&path);
+                loop {
+                    let read_start = Instant::now();
+                    let Some(item) = xml_iter.next() else {
+                        break;
+                    };
+                    stage_metrics
+                        .read_ns
+                        .fetch_add(duration_to_nanos(read_start.elapsed()), Ordering::Relaxed);
+
                     match item {
                         Ok(file_data) => {
+                            stage_metrics
+                                .input_xml_bytes
+                                .fetch_add(file_data.1.len() as u64, Ordering::Relaxed);
                             debug!(
                                 "[ZIP {:>2}] Got XML: {}, size: {}",
                                 i,
@@ -167,7 +198,12 @@ pub fn process_files(
                             );
                             xml_document_count.fetch_add(1, Ordering::Relaxed);
                             xml_docs_total.fetch_add(1, Ordering::Relaxed);
+                            let send_start = Instant::now();
                             parser_tx.send(file_data).unwrap();
+                            stage_metrics.parser_queue_wait_ns.fetch_add(
+                                duration_to_nanos(send_start.elapsed()),
+                                Ordering::Relaxed,
+                            );
                         }
                         Err(e) => {
                             error!(
@@ -192,12 +228,18 @@ pub fn process_files(
         let xml_docs_done = xml_docs_done.clone();
         let write_batches_total = write_batches_total.clone();
         let options = parse_options.clone();
+        let stage_metrics = stage_metrics.clone();
         handles.push(thread::spawn(move || {
             while let Ok((file_name, xml_content)) = parser_rx.recv() {
                 debug!("[XML {:>2}] Parsing file: {}", i, file_name);
+                let parse_start = Instant::now();
                 let parsed_xml = parse_xml_content(&file_name, &xml_content, &options);
+                stage_metrics
+                    .parse_ns
+                    .fetch_add(duration_to_nanos(parse_start.elapsed()), Ordering::Relaxed);
                 match parsed_xml {
                     Ok(parsed) => {
+                        stage_metrics.parsed_ok_docs.fetch_add(1, Ordering::Relaxed);
                         debug!("[XML {:>2}] Parsed file: {}", i, file_name);
                         if parsed.features.is_empty() {
                             debug!(
@@ -206,10 +248,18 @@ pub fn process_files(
                             );
                         } else {
                             write_batches_total.fetch_add(1, Ordering::Relaxed);
+                            let send_start = Instant::now();
                             writer_tx.send(parsed).unwrap();
+                            stage_metrics.writer_queue_wait_ns.fetch_add(
+                                duration_to_nanos(send_start.elapsed()),
+                                Ordering::Relaxed,
+                            );
                         }
                     }
                     Err(e) => {
+                        stage_metrics
+                            .parse_error_docs
+                            .fetch_add(1, Ordering::Relaxed);
                         error!("[XML {:>2}] Error parsing file {}: {}", i, file_name, e);
                         eprintln!("Error parsing file {}: {}", file_name, e);
                     }
@@ -224,21 +274,41 @@ pub fn process_files(
         let output_path = output_path.to_path_buf();
         let has_features = has_features.clone();
         let write_batches_done = write_batches_done.clone();
+        let stage_metrics = stage_metrics.clone();
         handles.push(thread::spawn(move || {
-            let mut writer = make_writer_by_ext(&output_path).unwrap();
+            let mut writer = make_writer_by_ext_with_options(&output_path, writer_options).unwrap();
             while let Ok(parsed_xml) = writer_rx.recv() {
                 debug!("[OUT] Adding features from file: {}", parsed_xml.file_name);
+                let features_in_batch = parsed_xml.features.len();
+                let write_start = Instant::now();
                 let write_result = writer.add_xml_features(parsed_xml);
+                stage_metrics
+                    .write_ns
+                    .fetch_add(duration_to_nanos(write_start.elapsed()), Ordering::Relaxed);
                 match write_result {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        stage_metrics
+                            .written_batches
+                            .fetch_add(1, Ordering::Relaxed);
+                        stage_metrics
+                            .written_features
+                            .fetch_add(features_in_batch, Ordering::Relaxed);
+                    }
                     Err(e) => {
+                        stage_metrics
+                            .write_error_batches
+                            .fetch_add(1, Ordering::Relaxed);
                         eprintln!("Error writing file {}: {}", output_path.display(), e);
                     }
                 }
                 write_batches_done.fetch_add(1, Ordering::Relaxed);
             }
             debug!("[OUT] Starting output file: {}", output_path.display());
+            let flush_start = Instant::now();
             let created_file = writer.flush().unwrap();
+            stage_metrics
+                .flush_ns
+                .fetch_add(duration_to_nanos(flush_start.elapsed()), Ordering::Relaxed);
             if !created_file {
                 debug!("[OUT] No features written");
             } else {
@@ -271,7 +341,120 @@ pub fn process_files(
         eprintln!("Empty output file: {}", output_path.display());
     }
 
+    emit_stage_metrics(
+        &stage_metrics,
+        elapsed,
+        xml_document_count.load(Ordering::Relaxed),
+    );
+
     Ok(xml_document_count.load(Ordering::Relaxed))
+}
+
+fn emit_stage_metrics(
+    stage_metrics: &StageMetrics,
+    wall_clock: Duration,
+    xml_document_count: usize,
+) {
+    if !log::log_enabled!(log::Level::Info) {
+        return;
+    }
+
+    let read_ns = stage_metrics.read_ns.load(Ordering::Relaxed);
+    let parse_ns = stage_metrics.parse_ns.load(Ordering::Relaxed);
+    let write_ns = stage_metrics.write_ns.load(Ordering::Relaxed);
+    let flush_ns = stage_metrics.flush_ns.load(Ordering::Relaxed);
+    let parser_queue_wait_ns = stage_metrics.parser_queue_wait_ns.load(Ordering::Relaxed);
+    let writer_queue_wait_ns = stage_metrics.writer_queue_wait_ns.load(Ordering::Relaxed);
+    let input_xml_bytes = stage_metrics.input_xml_bytes.load(Ordering::Relaxed);
+    let parsed_ok_docs = stage_metrics.parsed_ok_docs.load(Ordering::Relaxed);
+    let parse_error_docs = stage_metrics.parse_error_docs.load(Ordering::Relaxed);
+    let written_batches = stage_metrics.written_batches.load(Ordering::Relaxed);
+    let written_features = stage_metrics.written_features.load(Ordering::Relaxed);
+    let write_error_batches = stage_metrics.write_error_batches.load(Ordering::Relaxed);
+
+    info!("Stage timing summary (aggregate worker time):");
+    info!(
+        "  read/decompress: {} ({:.1}% of wall)",
+        format_duration_ns(read_ns),
+        percent_of_wall(read_ns, wall_clock)
+    );
+    info!(
+        "  parse XML:       {} ({:.1}% of wall)",
+        format_duration_ns(parse_ns),
+        percent_of_wall(parse_ns, wall_clock)
+    );
+    info!(
+        "  writer add:      {} ({:.1}% of wall)",
+        format_duration_ns(write_ns),
+        percent_of_wall(write_ns, wall_clock)
+    );
+    info!(
+        "  writer flush:    {} ({:.1}% of wall)",
+        format_duration_ns(flush_ns),
+        percent_of_wall(flush_ns, wall_clock)
+    );
+    info!(
+        "  parser queue wait: {} ({:.1}% of wall)",
+        format_duration_ns(parser_queue_wait_ns),
+        percent_of_wall(parser_queue_wait_ns, wall_clock)
+    );
+    info!(
+        "  writer queue wait: {} ({:.1}% of wall)",
+        format_duration_ns(writer_queue_wait_ns),
+        percent_of_wall(writer_queue_wait_ns, wall_clock)
+    );
+
+    let input_mib = bytes_to_mib(input_xml_bytes);
+    let wall_secs = wall_clock.as_secs_f64();
+    let end_to_end_mib_per_s = if wall_secs > 0.0 {
+        input_mib / wall_secs
+    } else {
+        0.0
+    };
+    let parse_secs = Duration::from_nanos(parse_ns).as_secs_f64();
+    let parse_mib_per_s = if parse_secs > 0.0 {
+        input_mib / parse_secs
+    } else {
+        0.0
+    };
+
+    info!("Stage throughput summary:");
+    info!("  XML documents discovered: {}", xml_document_count);
+    info!("  XML documents parsed OK: {}", parsed_ok_docs);
+    info!("  XML documents parse errors: {}", parse_error_docs);
+    info!("  Input XML bytes: {:.2} MiB", input_mib);
+    info!(
+        "  Parse throughput (aggregate): {:.2} MiB/s",
+        parse_mib_per_s
+    );
+    info!("  End-to-end throughput: {:.2} MiB/s", end_to_end_mib_per_s);
+    info!("  Written batches: {}", written_batches);
+    info!("  Written features: {}", written_features);
+    info!("  Writer batch errors: {}", write_error_batches);
+}
+
+#[inline]
+fn duration_to_nanos(duration: Duration) -> u64 {
+    duration.as_nanos().min(u64::MAX as u128) as u64
+}
+
+#[inline]
+fn format_duration_ns(nanos: u64) -> String {
+    format!("{:.3}s", Duration::from_nanos(nanos).as_secs_f64())
+}
+
+#[inline]
+fn percent_of_wall(stage_nanos: u64, wall_clock: Duration) -> f64 {
+    let wall_nanos = duration_to_nanos(wall_clock);
+    if wall_nanos == 0 {
+        return 0.0;
+    }
+    (stage_nanos as f64 / wall_nanos as f64) * 100.0
+}
+
+#[inline]
+fn bytes_to_mib(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
 }
 
 fn worker_counts(cpu_count: usize, input_file_count: usize) -> (usize, usize) {
