@@ -42,6 +42,7 @@ type ParseProfileSummary = {
 };
 
 const MAP_CONTAINER_ID = "map";
+const COPYRIGHT_YEAR_ID = "copyright-year";
 const GEOJSON_SOURCE_ID = "parsed-geojson";
 const POLYGON_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon`;
 const POLYGON_OUTLINE_LAYER_ID = `${GEOJSON_SOURCE_ID}-polygon-outline`;
@@ -567,12 +568,18 @@ const parseXmlDocumentsWithWorker = async (
 
 async function main() {
   const dropArea = document.getElementById("drop-area");
+  const copyrightYearEl = document.getElementById(COPYRIGHT_YEAR_ID);
   const statusEl = document.getElementById("status");
   const fileInput = document.getElementById("file-input") as HTMLInputElement | null;
   const downloadButton = document.getElementById(
     "download-geojson",
   ) as HTMLButtonElement | null;
   const testDataButton = document.getElementById("load-test-data") as HTMLButtonElement | null;
+
+  if (copyrightYearEl) {
+    copyrightYearEl.textContent = String(new Date().getFullYear());
+  }
+
   initMap();
 
   if (!dropArea || !statusEl || !fileInput) {
