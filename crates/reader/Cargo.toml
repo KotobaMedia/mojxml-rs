@@ -9,4 +9,4 @@ description = "Read MOJ cadastral XML and ZIP archives"
 
 [dependencies]
 thiserror = "2"
-zip = { version = "8.2", default-features = false, features = ["deflate"] }
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
