@@ -603,11 +603,10 @@ impl<'a> StreamParser<'a> {
                     surface.active_boundary = Some(BoundaryKind::Interior(interior_index));
                     surface.boundary_depth = Some(depth);
                 }
-                b"GM_Ring" => {
-                    if surface.active_boundary.is_some() {
+                b"GM_Ring"
+                    if surface.active_boundary.is_some() => {
                         surface.ring_depth = Some(depth);
                     }
-                }
                 _ => {}
             }
 
