@@ -3,7 +3,9 @@ use crate::error::{Error, Result};
 use crate::types::{CommonProperties, Feature, FeatureProperties};
 use crate::{ParsedXML, 筆界未定構成筆};
 use geo::algorithm::interior_point::InteriorPoint;
-use geo_types::{LineString, Point, Polygon};
+use geo::line_intersection::{LineIntersection, line_intersection};
+use geo::{BoundingRect, Contains, CoordsIter, LinesIter};
+use geo_types::{Coord, Line, LineString, Point, Polygon};
 use proj4rs::proj::Proj;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
@@ -1032,11 +1034,90 @@ fn required_attribute(start: &BytesStart<'_>, attr_name: &str) -> Result<String>
 }
 
 fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
-    // interior_point returns None if the polygon is empty or has no interior point
-    // We've tested on 2024 data, and all polygons have an interior point
-    polygon
-        .interior_point()
+    fast_point_on_polygon(polygon)
+        // Preserve geo's handling of empty and degenerate polygons. Valid cadastral
+        // polygons should take the allocation-light fast path above.
+        .or_else(|| polygon.interior_point())
         .ok_or(Error::InteriorPointUnavailable)
+}
+
+/// Prefer the bounding-box center when it is interior, then find the same
+/// central scan-line point as `geo::InteriorPoint`. The scan avoids geo's
+/// general-purpose sweep-line and full DE-9IM topology construction.
+fn fast_point_on_polygon(polygon: &Polygon) -> Option<Point<f64>> {
+    if polygon.exterior().0.len() == 1 {
+        return Some(polygon.exterior().0[0].into());
+    }
+
+    let bounds = polygon.bounding_rect()?;
+    let mut y_mid = (bounds.min().y + bounds.max().y) / 2.0;
+    let bounds_center = Point::new((bounds.min().x + bounds.max().x) / 2.0, y_mid);
+    if polygon.contains(&bounds_center) {
+        return Some(bounds_center);
+    }
+
+    // Match geo's vertex perturbation so the fast path produces the same point
+    // when the bounding-box midpoint lies directly on a polygon vertex.
+    if polygon.coords_iter().any(|coord| coord.y == y_mid)
+        && let Some(closest_y) = polygon
+            .coords_iter()
+            .filter(|coord| coord.y != y_mid)
+            .map(|coord| coord.y)
+            .min_by(|a, b| (a - y_mid).abs().total_cmp(&(b - y_mid).abs()))
+    {
+        y_mid = (y_mid + closest_y) / 2.0;
+    }
+
+    let scan_line = Line::new(
+        Coord {
+            x: bounds.min().x,
+            y: y_mid,
+        },
+        Coord {
+            x: bounds.max().x,
+            y: y_mid,
+        },
+    );
+
+    // A direct O(n) scan is cheaper here than building the general sweep-line
+    // index used by geo; every intersection of interest involves `scan_line`.
+    // Most parcel scan lines cross only twice. A small initial allocation avoids
+    // another full coordinate-count pass and does not over-allocate for complex
+    // boundaries; Vec grows normally for the uncommon high-crossing case.
+    let mut intersections = Vec::with_capacity(8);
+    for line in polygon.lines_iter() {
+        match line_intersection(line, scan_line) {
+            Some(LineIntersection::Collinear { intersection }) => {
+                intersections.push(Point::from(intersection.start));
+                intersections.push(Point::from(intersection.end));
+            }
+            Some(LineIntersection::SinglePoint { intersection, .. }) => {
+                intersections.push(Point::from(intersection));
+            }
+            None => {}
+        }
+    }
+
+    if let [start, end] = intersections.as_slice() {
+        let midpoint = Point::new((start.x() + end.x()) / 2.0, y_mid);
+        return polygon.contains(&midpoint).then_some(midpoint);
+    }
+
+    intersections.sort_by(|a, b| a.x().total_cmp(&b.x()));
+
+    let mut candidates = intersections
+        .windows(2)
+        .map(|pair| {
+            let length = pair[1].x() - pair[0].x();
+            (Point::new((pair[0].x() + pair[1].x()) / 2.0, y_mid), length)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+    candidates
+        .into_iter()
+        .map(|(midpoint, _)| midpoint)
+        .find(|midpoint| polygon.contains(midpoint))
 }
 
 #[inline]
@@ -1267,6 +1348,56 @@ mod tests {
             first_constituent.地番,
             first_constituent.大字コード
         );
+    }
+
+    #[test]
+    fn test_fast_point_on_polygon_is_inside_for_varied_shapes() {
+        let polygons = [
+            wkt! { POLYGON((0.0 0.0, 8.0 0.0, 8.0 8.0, 0.0 8.0, 0.0 0.0)) },
+            wkt! { POLYGON((-2.0 1.0, 1.0 3.0, 4.0 1.0, 1.0 -1.0, -2.0 1.0)) },
+            wkt! { POLYGON((0.0 0.0, 10.0 0.0, 10.0 10.0, 0.0 10.0, 0.0 0.0), (3.0 3.0, 3.0 7.0, 7.0 7.0, 7.0 3.0, 3.0 3.0)) },
+        ];
+
+        for polygon in polygons {
+            let actual =
+                fast_point_on_polygon(&polygon).expect("fast path should find an interior point");
+
+            assert!(polygon.contains(&actual));
+        }
+    }
+
+    #[test]
+    fn test_point_on_polygon_prefers_an_inside_bounds_center() {
+        let polygon = wkt! {
+            POLYGON((0.0 0.0, 4.0 0.0, 5.0 2.0, 4.0 4.0,
+                     0.0 4.0, -1.0 2.0, 0.0 0.0))
+        };
+
+        assert_eq!(point_on_polygon(&polygon).unwrap(), Point::new(2.0, 2.0));
+    }
+
+    #[test]
+    fn test_point_on_polygon_scans_when_bounds_center_is_outside() {
+        let polygon = wkt! {
+            POLYGON((0.0 0.0, 6.0 0.0, 6.0 1.0, 1.0 1.0, 1.0 5.0,
+                     6.0 5.0, 6.0 6.0, 0.0 6.0, 0.0 0.0))
+        };
+        assert!(!polygon.contains(&Point::new(3.0, 3.0)));
+        let expected = fast_point_on_polygon(&polygon).expect("scan should find an interior point");
+        assert_eq!(expected, Point::new(0.5, 3.0));
+        assert_eq!(point_on_polygon(&polygon).unwrap(), expected);
+        assert!(polygon.contains(&expected));
+    }
+
+    #[test]
+    fn test_point_on_polygon_falls_back_for_degenerate_shape() {
+        let polygon = wkt! { POLYGON((0.0 0.0, 1.0 0.0, 2.0 0.0, 0.0 0.0)) };
+        let expected = polygon
+            .interior_point()
+            .expect("geo should find a boundary point");
+
+        assert!(fast_point_on_polygon(&polygon).is_none());
+        assert_eq!(point_on_polygon(&polygon).unwrap(), expected);
     }
 
     #[test]
