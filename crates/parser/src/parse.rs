@@ -14,6 +14,7 @@ use rustc_hash::FxHashMap as HashMap;
 // --- Type Aliases ---
 type Curve = Point;
 type Surface = Polygon;
+type ObjectId = u32;
 
 #[derive(Debug, Clone, Default)]
 pub struct ParseOptions {
@@ -53,7 +54,7 @@ impl CommonPropsBuilder {
 
 #[derive(Default)]
 struct PointBuilder {
-    id: String,
+    id: ObjectId,
     saw_position: bool,
     saw_direct_position: bool,
     x: Option<f64>,
@@ -68,7 +69,7 @@ enum CurvePositionKind {
 
 #[derive(Default)]
 struct CurveBuilder {
-    id: String,
+    id: ObjectId,
     saw_segment: bool,
     saw_first_column: bool,
     first_column_depth: Option<usize>,
@@ -76,7 +77,7 @@ struct CurveBuilder {
     position_depth: Option<usize>,
     direct_x: Option<f64>,
     direct_y: Option<f64>,
-    indirect_ref: Option<String>,
+    indirect_ref: Option<ObjectId>,
 }
 
 #[derive(Clone, Copy)]
@@ -87,7 +88,7 @@ enum BoundaryKind {
 
 #[derive(Default)]
 struct SurfaceBuilder {
-    id: String,
+    id: ObjectId,
     saw_patch: bool,
     saw_polygon: bool,
     saw_polygon_boundary: bool,
@@ -103,7 +104,7 @@ struct SurfaceBuilder {
 #[derive(Default)]
 struct FudeBuilder {
     id: String,
-    geometry_ref: Option<String>,
+    geometry_ref: Option<ObjectId>,
     precision_class: Option<String>,
     ooaza_code: Option<String>,
     chome_code: Option<String>,
@@ -183,9 +184,10 @@ struct StreamParser<'a> {
     saw_spatial: bool,
     saw_subject: bool,
 
-    points: HashMap<String, Point>,
-    curves: HashMap<String, Curve>,
-    surfaces: HashMap<String, Surface>,
+    points: HashMap<ObjectId, Point>,
+    curves: HashMap<ObjectId, Curve>,
+    surfaces: HashMap<ObjectId, Surface>,
+    used_surface_features: HashMap<ObjectId, usize>,
     features: Vec<Feature>,
 
     point: Option<PointBuilder>,
@@ -214,6 +216,7 @@ impl<'a> StreamParser<'a> {
             points: HashMap::with_capacity_and_hasher(16_384, Default::default()),
             curves: HashMap::with_capacity_and_hasher(32_768, Default::default()),
             surfaces: HashMap::with_capacity_and_hasher(4_096, Default::default()),
+            used_surface_features: HashMap::with_capacity_and_hasher(4_096, Default::default()),
             features: Vec::with_capacity(4_096),
             point: None,
             curve: None,
@@ -581,7 +584,8 @@ impl<'a> StreamParser<'a> {
                     }
                     CurvePositionKind::Indirect => {
                         if depth == position_depth + 1 && curve.indirect_ref.is_none() {
-                            curve.indirect_ref = Some(required_attribute(start, "idref")?);
+                            curve.indirect_ref =
+                                Some(required_object_id_attribute(start, "idref", b'P')?);
                         }
                     }
                 }
@@ -614,11 +618,11 @@ impl<'a> StreamParser<'a> {
             if let Some(ring_depth) = surface.ring_depth
                 && depth == ring_depth + 1
             {
-                let idref = required_attribute(start, "idref")?;
+                let idref = required_object_id_attribute(start, "idref", b'C')?;
                 let curve = *self
                     .curves
                     .get(&idref)
-                    .ok_or_else(|| Error::PointNotFound(idref.clone()))?;
+                    .ok_or_else(|| Error::PointNotFound(format_object_id(b'C', idref)))?;
 
                 match surface.active_boundary {
                     Some(BoundaryKind::Exterior) => surface.exterior_points.push(curve),
@@ -692,7 +696,7 @@ impl<'a> StreamParser<'a> {
         match () {
             _ if name_eq(name, "形状") => {
                 if let Some(fude) = &mut self.fude {
-                    fude.geometry_ref = Some(required_attribute(start, "idref")?);
+                    fude.geometry_ref = Some(required_object_id_attribute(start, "idref", b'F')?);
                 }
             }
             _ if name_eq(name, "精度区分") => {
@@ -741,7 +745,13 @@ impl<'a> StreamParser<'a> {
 
         if depth == 2 {
             match () {
-                _ if name_eq(name, "空間属性") => self.in_spatial = false,
+                _ if name_eq(name, "空間属性") => {
+                    self.in_spatial = false;
+                    // Subject parsing only needs completed surfaces. Release point
+                    // and curve keys and buckets before materializing features.
+                    self.points = HashMap::default();
+                    self.curves = HashMap::default();
+                }
                 _ if name_eq(name, "主題属性") => self.in_subject = false,
                 _ => {}
             }
@@ -800,7 +810,7 @@ impl<'a> StreamParser<'a> {
 
     fn start_point(&mut self, start: &BytesStart<'_>) -> Result<()> {
         self.point = Some(PointBuilder {
-            id: required_attribute(start, "id")?,
+            id: required_object_id_attribute(start, "id", b'P')?,
             ..Default::default()
         });
         Ok(())
@@ -808,7 +818,7 @@ impl<'a> StreamParser<'a> {
 
     fn start_curve(&mut self, start: &BytesStart<'_>) -> Result<()> {
         self.curve = Some(CurveBuilder {
-            id: required_attribute(start, "id")?,
+            id: required_object_id_attribute(start, "id", b'C')?,
             ..Default::default()
         });
         Ok(())
@@ -816,7 +826,7 @@ impl<'a> StreamParser<'a> {
 
     fn start_surface(&mut self, start: &BytesStart<'_>) -> Result<()> {
         self.surface = Some(SurfaceBuilder {
-            id: required_attribute(start, "id")?,
+            id: required_object_id_attribute(start, "id", b'F')?,
             ..Default::default()
         });
         Ok(())
@@ -851,7 +861,11 @@ impl<'a> StreamParser<'a> {
             .y
             .ok_or_else(|| Error::MissingElement("Y".to_string()))?;
 
-        self.points.insert(point.id, Point::new(x, y));
+        // Most curves indirectly reference these points. Project each unique
+        // point once here instead of projecting it again for every curve.
+        let point_id = point.id;
+        let point = curve_from_source_xy(x, y, self.source_crs, self.target_crs)?;
+        self.points.insert(point_id, point);
         Ok(())
     }
 
@@ -869,7 +883,7 @@ impl<'a> StreamParser<'a> {
             return Err(Error::MissingElement("GM_PointArray.column".to_string()));
         }
 
-        let (x, y) = match curve.position_kind {
+        let curve_point = match curve.position_kind {
             Some(CurvePositionKind::Direct) => {
                 let x = curve
                     .direct_x
@@ -877,7 +891,7 @@ impl<'a> StreamParser<'a> {
                 let y = curve
                     .direct_y
                     .ok_or_else(|| Error::MissingElement("Y".to_string()))?;
-                (x, y)
+                curve_from_source_xy(x, y, self.source_crs, self.target_crs)?
             }
             Some(CurvePositionKind::Indirect) => {
                 let idref = curve
@@ -886,18 +900,13 @@ impl<'a> StreamParser<'a> {
                 let point = self
                     .points
                     .get(&idref)
-                    .ok_or_else(|| Error::PointNotFound(idref.clone()))?;
-                (point.x(), point.y())
+                    .ok_or_else(|| Error::PointNotFound(format_object_id(b'P', idref)))?;
+                *point
             }
             None => {
                 return Err(Error::MissingElement("GM_Position.*".to_string()));
             }
         };
-
-        let mut curve_point = Curve::new(y, x);
-        if let (Some(source_crs), Some(target_crs)) = (self.source_crs, self.target_crs) {
-            transform_curve_crs(&mut curve_point, source_crs, target_crs)?;
-        }
 
         self.curves.insert(curve.id, curve_point);
         Ok(())
@@ -952,12 +961,23 @@ impl<'a> StreamParser<'a> {
             }
         }
 
-        let geometry = fude
+        let geometry_id = fude
             .geometry_ref
-            .as_ref()
-            .and_then(|idref| self.surfaces.get(idref))
-            .cloned()
             .ok_or_else(|| Error::MissingElement("geometry".to_string()))?;
+        let (geometry, first_use) = match self.surfaces.remove(&geometry_id) {
+            Some(geometry) => (geometry, true),
+            None => {
+                // Shared surface references are unusual, but the old implementation
+                // supported them by cloning every surface. Preserve that behavior
+                // while keeping the common one-to-one case allocation-free.
+                let feature_index = self
+                    .used_surface_features
+                    .get(&geometry_id)
+                    .copied()
+                    .ok_or_else(|| Error::MissingElement("geometry".to_string()))?;
+                (self.features[feature_index].geometry.clone(), false)
+            }
+        };
 
         let ooaza_code = fude
             .ooaza_code
@@ -977,6 +997,7 @@ impl<'a> StreamParser<'a> {
 
         let pop = point_on_polygon(&geometry)?;
 
+        let feature_index = self.features.len();
         self.features.push(Feature {
             geometry,
             props: FeatureProperties {
@@ -997,6 +1018,10 @@ impl<'a> StreamParser<'a> {
                 代表点経度: pop.x(),
             },
         });
+        if first_use {
+            self.used_surface_features
+                .insert(geometry_id, feature_index);
+        }
 
         Ok(())
     }
@@ -1031,6 +1056,55 @@ fn required_attribute(start: &BytesStart<'_>, attr_name: &str) -> Result<String>
         element: name_to_string(start.name().as_ref()),
         attribute: attr_name.to_string(),
     })
+}
+
+fn required_object_id_attribute(
+    start: &BytesStart<'_>,
+    attr_name: &str,
+    expected_prefix: u8,
+) -> Result<ObjectId> {
+    for attr in start.attributes().with_checks(false).flatten() {
+        if local_name(attr.key.as_ref()) == attr_name.as_bytes() {
+            return parse_object_id(attr.value.as_ref(), expected_prefix);
+        }
+    }
+
+    Err(Error::MissingAttribute {
+        element: name_to_string(start.name().as_ref()),
+        attribute: attr_name.to_string(),
+    })
+}
+
+fn parse_object_id(value: &[u8], expected_prefix: u8) -> Result<ObjectId> {
+    let invalid = || {
+        Error::UnexpectedElement(format!(
+            "invalid object ID (expected prefix '{}'): {}",
+            char::from(expected_prefix),
+            String::from_utf8_lossy(value)
+        ))
+    };
+    let Some((&prefix, digits)) = value.split_first() else {
+        return Err(invalid());
+    };
+    if prefix != expected_prefix || digits.is_empty() {
+        return Err(invalid());
+    }
+
+    let mut id = 0u32;
+    for &digit in digits {
+        if !digit.is_ascii_digit() {
+            return Err(invalid());
+        }
+        id = id
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(u32::from(digit - b'0')))
+            .ok_or_else(&invalid)?;
+    }
+    Ok(id)
+}
+
+fn format_object_id(prefix: u8, id: ObjectId) -> String {
+    format!("{}{id:09}", char::from(prefix))
 }
 
 fn point_on_polygon(polygon: &Polygon) -> Result<Point<f64>> {
@@ -1126,6 +1200,19 @@ fn transform_curve_crs(curve: &mut Curve, source_crs: &Proj, target_crs: &Proj) 
     proj4rs::transform::transform(source_crs, target_crs, &mut point)?;
     *curve = Point::new(point.0.to_degrees(), point.1.to_degrees());
     Ok(())
+}
+
+fn curve_from_source_xy(
+    x: f64,
+    y: f64,
+    source_crs: Option<&Proj>,
+    target_crs: Option<&Proj>,
+) -> Result<Curve> {
+    let mut curve = Curve::new(y, x);
+    if let (Some(source_crs), Some(target_crs)) = (source_crs, target_crs) {
+        transform_curve_crs(&mut curve, source_crs, target_crs)?;
+    }
+    Ok(curve)
 }
 
 /// Transform all curves' coordinates from source_crs to target_crs in-place.
@@ -1260,6 +1347,78 @@ mod tests {
                 expected_point.y()
             );
         }
+    }
+
+    #[test]
+    fn test_parse_compact_object_id() {
+        assert_eq!(parse_object_id(b"P000000001", b'P').unwrap(), 1);
+        assert_eq!(parse_object_id(b"C4294967295", b'C').unwrap(), u32::MAX);
+        assert!(parse_object_id(b"C000000001", b'P').is_err());
+        assert!(parse_object_id(b"P12x", b'P').is_err());
+        assert!(parse_object_id(b"P4294967296", b'P').is_err());
+    }
+
+    #[test]
+    fn test_spatial_lookup_maps_are_released_before_subject_parsing() {
+        let options = ParseOptions::default();
+        let mut parser = StreamParser::new(&options);
+        parser.in_spatial = true;
+        parser.points.insert(1, Point::new(1.0, 2.0));
+        parser.curves.insert(1, Point::new(3.0, 4.0));
+        parser.surfaces.insert(
+            1,
+            Polygon::new(
+                LineString::from(vec![(0.0, 0.0), (1.0, 0.0), (0.0, 0.0)]),
+                vec![],
+            ),
+        );
+
+        parser.handle_end("空間属性".as_bytes(), 2).unwrap();
+
+        assert!(parser.points.is_empty());
+        assert_eq!(parser.points.capacity(), 0);
+        assert!(parser.curves.is_empty());
+        assert_eq!(parser.curves.capacity(), 0);
+        assert_eq!(parser.surfaces.len(), 1);
+    }
+
+    #[test]
+    fn test_surface_is_moved_once_and_cloned_only_for_shared_reference() {
+        let options = ParseOptions {
+            include_chikugai: true,
+            ..Default::default()
+        };
+        let mut parser = StreamParser::new(&options);
+        let geometry = Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (2.0, 0.0),
+                (2.0, 2.0),
+                (0.0, 2.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        );
+        parser.surfaces.insert(1, geometry.clone());
+
+        for (id, parcel_number) in [("H000000001", "1"), ("H000000002", "2")] {
+            parser.fude = Some(FudeBuilder {
+                id: id.to_string(),
+                geometry_ref: Some(1),
+                ooaza_code: Some(String::new()),
+                chome_code: Some(String::new()),
+                koaza_code: Some(String::new()),
+                yobi_code: Some(String::new()),
+                parcel_number: Some(parcel_number.to_string()),
+                ..Default::default()
+            });
+            parser.finish_fude().unwrap();
+        }
+
+        assert!(parser.surfaces.is_empty());
+        assert_eq!(parser.features.len(), 2);
+        assert_eq!(parser.features[0].geometry, geometry);
+        assert_eq!(parser.features[1].geometry, geometry);
     }
 
     #[test]
