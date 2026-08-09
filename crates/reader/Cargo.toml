@@ -8,5 +8,5 @@ repository.workspace = true
 description = "Read MOJ cadastral XML and ZIP archives"
 
 [dependencies]
-thiserror = "2"
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
+thiserror = "2.0.19"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

@@ -6,11 +6,100 @@ use log::{debug, error, info};
 use mojxml_parser::{ParseOptions, ParsedXML, parse_xml_content};
 use mojxml_reader::iter_xml_contents;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+const PARSER_QUEUE_BYTE_BUDGET: usize = 512 * 1024 * 1024;
+const WRITER_QUEUE_BYTE_BUDGET: usize = 512 * 1024 * 1024;
+
+struct ByteBudget {
+    limit: usize,
+    state: Mutex<ByteBudgetState>,
+    available: Condvar,
+}
+
+#[derive(Default)]
+struct ByteBudgetState {
+    used: usize,
+    next_ticket: u64,
+    serving_ticket: u64,
+}
+
+impl ByteBudget {
+    fn new(limit: usize) -> Arc<Self> {
+        assert!(limit > 0, "byte budget must be greater than zero");
+        Arc::new(Self {
+            limit,
+            state: Mutex::new(ByteBudgetState::default()),
+            available: Condvar::new(),
+        })
+    }
+
+    fn reserve(self: &Arc<Self>, bytes: usize) -> BytePermit {
+        // An individual document may exceed the budget. Reserve the whole budget
+        // for it so that it can still make progress without overlapping another
+        // queued or active document.
+        let reserved = bytes.max(1).min(self.limit);
+        let mut state = self.state.lock().expect("byte budget mutex poisoned");
+        let ticket = state.next_ticket;
+        state.next_ticket = state
+            .next_ticket
+            .checked_add(1)
+            .expect("byte budget ticket overflow");
+        while ticket != state.serving_ticket || state.used.saturating_add(reserved) > self.limit {
+            state = self
+                .available
+                .wait(state)
+                .expect("byte budget mutex poisoned");
+        }
+        state.used += reserved;
+        state.serving_ticket += 1;
+        drop(state);
+        // Wake the next ticket immediately when the remaining budget can admit it.
+        self.available.notify_all();
+
+        BytePermit {
+            budget: self.clone(),
+            reserved,
+        }
+    }
+}
+
+struct BytePermit {
+    budget: Arc<ByteBudget>,
+    reserved: usize,
+}
+
+impl Drop for BytePermit {
+    fn drop(&mut self) {
+        let mut state = self
+            .budget
+            .state
+            .lock()
+            .expect("byte budget mutex poisoned");
+        state.used = state
+            .used
+            .checked_sub(self.reserved)
+            .expect("released more bytes than reserved");
+        drop(state);
+        self.budget.available.notify_all();
+    }
+}
+
+struct ParserQueueItem {
+    file_name: String,
+    xml_content: String,
+    source_bytes: usize,
+    _permit: BytePermit,
+}
+
+struct WriterQueueItem {
+    parsed: ParsedXML,
+    _permit: BytePermit,
+}
 
 #[derive(Default)]
 struct StageMetrics {
@@ -37,8 +126,10 @@ pub fn process_files(
     let input_file_count = src_files.len();
     let cpu_count = num_cpus::get().max(1);
     let (zip_workers, parse_workers) = worker_counts(cpu_count, input_file_count);
-    let parser_queue_capacity = (parse_workers * 3).clamp(8, 64);
-    let writer_queue_capacity = (parse_workers * 3).clamp(8, 32);
+    let parser_queue_capacity = (parse_workers * 2).clamp(2, 32);
+    let writer_queue_capacity = (parse_workers * 2).clamp(2, 16);
+    let parser_byte_budget = ByteBudget::new(PARSER_QUEUE_BYTE_BUDGET);
+    let writer_byte_budget = ByteBudget::new(WRITER_QUEUE_BYTE_BUDGET);
 
     let m = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::stdout_with_hz(2));
     let sty = ProgressStyle::with_template(
@@ -66,14 +157,14 @@ pub fn process_files(
             .with_message("input read"),
     );
     // Parser channels
-    let (parser_tx, parser_rx) = bounded::<(String, String)>(parser_queue_capacity);
+    let (parser_tx, parser_rx) = bounded::<ParserQueueItem>(parser_queue_capacity);
     let parse_pb = m.add(
         indicatif::ProgressBar::new(0)
             .with_style(sty.clone())
             .with_message("XML parse "),
     );
     // Writer channels
-    let (writer_tx, writer_rx) = bounded::<ParsedXML>(writer_queue_capacity);
+    let (writer_tx, writer_rx) = bounded::<WriterQueueItem>(writer_queue_capacity);
     let write_pb = m.add(
         indicatif::ProgressBar::new(0)
             .with_style(sty.clone())
@@ -172,6 +263,7 @@ pub fn process_files(
         let input_files_done = input_files_done.clone();
         let xml_docs_total = xml_docs_total.clone();
         let stage_metrics = stage_metrics.clone();
+        let parser_byte_budget = parser_byte_budget.clone();
         handles.push(thread::spawn(move || {
             while let Ok(path) = input_rx.recv() {
                 debug!("[ZIP {:>2}] Opening file: {}", i, path.display());
@@ -187,19 +279,27 @@ pub fn process_files(
 
                     match item {
                         Ok(file_data) => {
+                            let (file_name, xml_content) = file_data;
+                            let source_bytes = xml_content.len();
                             stage_metrics
                                 .input_xml_bytes
-                                .fetch_add(file_data.1.len() as u64, Ordering::Relaxed);
+                                .fetch_add(source_bytes as u64, Ordering::Relaxed);
                             debug!(
                                 "[ZIP {:>2}] Got XML: {}, size: {}",
-                                i,
-                                file_data.0,
-                                file_data.1.len()
+                                i, file_name, source_bytes
                             );
                             xml_document_count.fetch_add(1, Ordering::Relaxed);
                             xml_docs_total.fetch_add(1, Ordering::Relaxed);
                             let send_start = Instant::now();
-                            parser_tx.send(file_data).unwrap();
+                            let permit = parser_byte_budget.reserve(source_bytes);
+                            parser_tx
+                                .send(ParserQueueItem {
+                                    file_name,
+                                    xml_content,
+                                    source_bytes,
+                                    _permit: permit,
+                                })
+                                .unwrap();
                             stage_metrics.parser_queue_wait_ns.fetch_add(
                                 duration_to_nanos(send_start.elapsed()),
                                 Ordering::Relaxed,
@@ -229,14 +329,23 @@ pub fn process_files(
         let write_batches_total = write_batches_total.clone();
         let options = parse_options.clone();
         let stage_metrics = stage_metrics.clone();
+        let writer_byte_budget = writer_byte_budget.clone();
         handles.push(thread::spawn(move || {
-            while let Ok((file_name, xml_content)) = parser_rx.recv() {
+            while let Ok(ParserQueueItem {
+                file_name,
+                xml_content,
+                source_bytes,
+                _permit: parser_permit,
+            }) = parser_rx.recv()
+            {
                 debug!("[XML {:>2}] Parsing file: {}", i, file_name);
                 let parse_start = Instant::now();
                 let parsed_xml = parse_xml_content(&file_name, &xml_content, &options);
                 stage_metrics
                     .parse_ns
                     .fetch_add(duration_to_nanos(parse_start.elapsed()), Ordering::Relaxed);
+                drop(xml_content);
+                drop(parser_permit);
                 match parsed_xml {
                     Ok(parsed) => {
                         stage_metrics.parsed_ok_docs.fetch_add(1, Ordering::Relaxed);
@@ -249,7 +358,13 @@ pub fn process_files(
                         } else {
                             write_batches_total.fetch_add(1, Ordering::Relaxed);
                             let send_start = Instant::now();
-                            writer_tx.send(parsed).unwrap();
+                            let permit = writer_byte_budget.reserve(source_bytes);
+                            writer_tx
+                                .send(WriterQueueItem {
+                                    parsed,
+                                    _permit: permit,
+                                })
+                                .unwrap();
                             stage_metrics.writer_queue_wait_ns.fetch_add(
                                 duration_to_nanos(send_start.elapsed()),
                                 Ordering::Relaxed,
@@ -277,7 +392,11 @@ pub fn process_files(
         let stage_metrics = stage_metrics.clone();
         handles.push(thread::spawn(move || {
             let mut writer = make_writer_by_ext_with_options(&output_path, writer_options).unwrap();
-            while let Ok(parsed_xml) = writer_rx.recv() {
+            while let Ok(WriterQueueItem {
+                parsed: parsed_xml,
+                _permit: writer_permit,
+            }) = writer_rx.recv()
+            {
                 debug!("[OUT] Adding features from file: {}", parsed_xml.file_name);
                 let features_in_batch = parsed_xml.features.len();
                 let write_start = Instant::now();
@@ -302,6 +421,7 @@ pub fn process_files(
                     }
                 }
                 write_batches_done.fetch_add(1, Ordering::Relaxed);
+                drop(writer_permit);
             }
             debug!("[OUT] Starting output file: {}", output_path.display());
             let flush_start = Instant::now();
@@ -458,34 +578,58 @@ fn bytes_to_mib(bytes: u64) -> f64 {
 }
 
 fn worker_counts(cpu_count: usize, input_file_count: usize) -> (usize, usize) {
-    // Keep one dedicated writer thread and split remaining workers by stage weight.
+    // Keep one dedicated writer thread. Reading can only parallelize across input
+    // paths, but parsing can parallelize XML documents discovered inside one ZIP.
     let available = cpu_count.saturating_sub(1).max(1);
-    let zip_workers = (available / 3).max(1);
-    let parse_workers = (available - zip_workers).max(1);
-
-    // Avoid spinning up many workers when only a few input paths are provided.
     let worker_cap = input_file_count.max(1);
-    let zip_workers = zip_workers.min(worker_cap);
-    let parse_workers = parse_workers.min(worker_cap);
+    let zip_workers = (available / 3).max(1).min(worker_cap);
+    let parse_workers = (available - zip_workers).max(1);
 
     (zip_workers, parse_workers)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::worker_counts;
+    use super::{ByteBudget, worker_counts};
 
     #[test]
-    fn caps_workers_by_input_files() {
+    fn caps_only_zip_workers_by_input_files() {
         let (zip_workers, parse_workers) = worker_counts(32, 1);
         assert_eq!(zip_workers, 1);
-        assert_eq!(parse_workers, 1);
+        assert_eq!(parse_workers, 30);
     }
 
     #[test]
     fn keeps_at_least_one_worker_when_input_is_empty() {
         let (zip_workers, parse_workers) = worker_counts(4, 0);
         assert_eq!(zip_workers, 1);
-        assert_eq!(parse_workers, 1);
+        assert_eq!(parse_workers, 2);
+    }
+
+    #[test]
+    fn splits_workers_when_there_are_many_input_files() {
+        let (zip_workers, parse_workers) = worker_counts(10, 100);
+        assert_eq!(zip_workers, 3);
+        assert_eq!(parse_workers, 6);
+    }
+
+    #[test]
+    fn byte_budget_releases_reserved_capacity() {
+        let budget = ByteBudget::new(100);
+        let permit = budget.reserve(40);
+        assert_eq!(budget.state.lock().unwrap().used, 40);
+
+        drop(permit);
+        assert_eq!(budget.state.lock().unwrap().used, 0);
+    }
+
+    #[test]
+    fn oversized_item_reserves_the_whole_budget() {
+        let budget = ByteBudget::new(100);
+        let permit = budget.reserve(1_000);
+        assert_eq!(budget.state.lock().unwrap().used, 100);
+
+        drop(permit);
+        assert_eq!(budget.state.lock().unwrap().used, 0);
     }
 }
