@@ -11,26 +11,26 @@ repository.workspace = true
 tag = true
 
 [dependencies]
-anyhow = "1"
-clap = { version = "4.5", features = ["derive"] }
-crossbeam-channel = "0.5"
-flatgeobuf = { version = "6.0", default-features = false }
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+crossbeam-channel = "0.5.16"
+flatgeobuf = { version = "6.0.1", default-features = false }
 geo-types = { workspace = true }
-geojson = "0.24.2"
+geojson = "1.0.0"
 geoparquet-batch-writer = { workspace = true }
-geozero = "0.15"
-indicatif = "0.18"
-log = "0.4"
+geozero = "0.15.1"
+indicatif = "0.18.6"
+log = "0.4.33"
 mojxml-parser = { version = "0.3.0", path = "../parser", features = ["geoparquet"] }
 mojxml-reader = { version = "0.3.0", path = "../reader" }
-num_cpus = "1"
+num_cpus = "1.17.0"
 serde = { workspace = true }
-serde_json = "1"
-simplelog = "0.12"
+serde_json = "1.0.151"
+simplelog = "0.12.2"
 tempfile = { workspace = true }
 
 [dev-dependencies]
 geo = { workspace = true }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = { version = "0.6.0" }
+tikv-jemallocator = { version = "0.7.0" }

@@ -1,5 +1,5 @@
 import { mapLimit } from "async";
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
 import type { FeatureCollection, GeoJsonProperties } from "geojson";
 import { unzip } from "fflate";
 import "bootstrap/dist/css/bootstrap.min.css";

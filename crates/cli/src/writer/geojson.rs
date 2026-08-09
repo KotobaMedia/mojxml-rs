@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use geojson::{Geometry, Value};
+use geojson::{Geometry, GeometryValue};
 use serde::Serialize;
 
 use mojxml_parser::{CommonProperties, FeatureProperties, ParsedXML};
@@ -31,7 +31,7 @@ impl crate::writer::shared::Writer for GeoJsonWriter {
             // intermediate serde_json::Value/Object and String allocations.
             let output_feature = OutputFeature {
                 feature_type: "Feature",
-                geometry: Geometry::new(Value::from(&feature.geometry)),
+                geometry: Geometry::new(GeometryValue::from(&feature.geometry)),
                 properties: OutputProps {
                     shared,
                     feature: &feature.props,
