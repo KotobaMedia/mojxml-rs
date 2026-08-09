@@ -1,9 +1,12 @@
 import { mapLimit } from "async";
 import * as maplibregl from "maplibre-gl";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import type { FeatureCollection, GeoJsonProperties } from "geojson";
 import { unzip } from "fflate";
 import "bootstrap/dist/css/bootstrap.min.css";
 import "maplibre-gl/dist/maplibre-gl.css";
+
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 type WorkerSuccessMessage = {
   status: "success";
