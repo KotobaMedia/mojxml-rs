@@ -7,7 +7,7 @@
 ## このツールの特徴
 
 * 効率的に利用可能のプロセッサーをすべて並列で使うことができる。
-* 高速で処理できる。（著者の環境: Ryzen 9 9950X 16C/32T 96GB RAM の内、最大約 20GB 使用で全国 2025年度データを15分で一つの GeoParquet ファイルに変換できた）
+* 全国規模の変換性能を、同一データ・複数回実行で比較できるベンチマークを用意
 * zip内のzipアーカイブを自動で解凍する
 * 複数入力ファイルが統合されて一つの出力ファイルになります
 * 代表点座標を計算する
@@ -41,6 +41,8 @@ Options:
   -c, --chikugai             Include features marked as outside district ("地区外") or separate map ("別図"). You probably don't need this
   -v, --verbose              Enable logging. Will log to mojxml.log in the current directory
   -t, --temp-dir <TEMP_DIR>  Optional temporary directory for unzipping files. If not specified, the default temporary directory will be used. Use this option if your /tmp directory doesn't have enough space
+      --fgb-no-index          Disable FlatGeobuf spatial index generation. Has effect only when output extension is `.fgb`
+      --metrics-json <FILE>   Write machine-readable processing metrics to a JSON file
   -h, --help                 Print help
   -V, --version              Print version
 ```
@@ -69,6 +71,12 @@ mojxml-rs ./moj-2025-46.parquet ../dl-tool/zips/46*.zip
 * `output` は GeoParquet の書き込みを指します。
 
 より詳細なログがほしい場合は `--verbose` で実行すると `mojxml.log` ファイルに個別ファイルの読み込み・書き込み状況をログ形式で出力します。
+
+## ベンチマーク
+
+以前記載していた「Ryzen 9 9950X 16C/32T、96GB RAMの環境で、最大約20GBを使用し、全国2025年度データを約15分で変換」という値は、単発の非公式な実行結果でした。再現可能な性能値を得るため、現在はdataset fingerprint、ウォームアップ、5回の測定、peak RSS、出力検証、ばらつき判定を含むベンチマークrunnerを用意しています。
+
+WSL2とmacOSでの測定条件、実行コマンド、結果JSONの比較方法は[ベンチマーク手順](benchmarks/README.md)を参照してください。全国データを使わない短い動作確認も可能ですが、公開する性能値には標準の1 warm-up + 5 measured runsを使用してください。
 
 ## 開発
 
