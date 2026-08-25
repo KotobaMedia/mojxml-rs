@@ -1,14 +1,14 @@
-# 全国データ GeoParquet 変換ベンチマーク
+# 全国データ変換ベンチマーク
 
-このベンチマークは、同一の法務省地図XMLデータ一式を一つの GeoParquet
-ファイルへ変換する end-to-end 性能を、Linux（WSL2を含む）と macOS
+このベンチマークは、同一の法務省地図XMLデータ一式を一つの出力ファイルへ
+変換する end-to-end 性能を、Linux（WSL2を含む）と macOS
 で同じ手順により測定するものです。単発の実行時間ではなく、ウォームアップ1回と
 測定5回を標準とし、中央値、平均値の95%信頼区間、標準偏差、変動係数（CV）、
 peak RSS を記録します。
 
 ## 測定対象
 
-測定時間には、入力ZIPの読み込み・展開、XMLの解析、座標変換、GeoParquetの
+測定時間には、入力ZIPの読み込み・展開、XMLの解析、座標変換、指定形式の
 生成・flushを含みます。次の処理は測定時間に含めません。
 
 - release binary のビルド
@@ -18,8 +18,9 @@ peak RSS を記録します。
 入力ファイルはパス順に固定されます。各ファイルの相対パス、サイズ、SHA-256から
 dataset fingerprint を作るため、別のマシンで同一データを使ったか確認できます。
 各回は新しい出力ファイルを使い、正常終了、入力read/XML parse/write error が0件であること、
-全回のXML数・feature数が一致すること、および Parquet の header/footer magic を
-検証します。出力本体は標準では検証後に削除します。
+全回のXML数・feature数が一致すること、および選択した形式に応じて出力を検証します。
+GeoParquetではheader/footer magic、FlatGeobufではmagic bytesとheader、newline-delimited
+GeoJSONでは先頭・末尾のfeatureと改行終端を確認します。出力本体は標準では検証後に削除します。
 
 標準の結果は「入力を一度最後まで読み込んだ後の steady-state（warm-cache）性能」です。
 OSのページキャッシュを強制削除する操作はOSごとに権限と意味が異なるため行いません。
@@ -61,8 +62,12 @@ python3 benchmarks/run.py \
   --input-dir "$HOME/data/moj-2025" \
   --pattern '*.zip' \
   --work-dir "$HOME/benchmarks/mojxml-rs" \
+  --output-format fgb \
   --label ryzen-9950x-wsl2
 ```
+
+`--output-format` は `fgb`（標準）、`geoparquet`、`geojson` から選びます。`fgb` は標準で
+空間indexを生成します。indexなしを測定するときは `--cli-arg=--fgb-no-index` も指定します。
 
 macOSも同じコマンドを使い、識別しやすいlabelを指定します。
 

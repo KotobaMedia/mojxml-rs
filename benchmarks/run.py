@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run reproducible end-to-end mojxml-rs GeoParquet benchmarks.
+"""Run reproducible end-to-end mojxml-rs conversion benchmarks.
 
 The runner intentionally uses only the Python standard library.  It supports the
 two environments used for the project benchmark: Linux (including WSL2) and
@@ -27,6 +27,13 @@ from typing import Any, Iterable, Sequence
 
 SCHEMA_VERSION = 1
 MIB = 1024 * 1024
+FLATGEOBUF_MAGIC = b"fgb\x03fgb\x00"
+FLATGEOBUF_MAX_HEADER_SIZE = 10 * MIB
+OUTPUT_FORMATS = {
+    "fgb": {"extension": "fgb", "label": "FlatGeobuf"},
+    "geoparquet": {"extension": "parquet", "label": "GeoParquet"},
+    "geojson": {"extension": "geojson", "label": "GeoJSON"},
+}
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BINARY = REPO_ROOT / "target" / "release" / "mojxml-rs"
 SIGNATURE_FIELDS = (
@@ -323,6 +330,26 @@ def run_child(
     return exit_code, wall_time, resource_usage
 
 
+def validate_flatgeobuf(path: Path) -> int:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            magic = handle.read(len(FLATGEOBUF_MAGIC))
+            encoded_header_size = handle.read(4)
+    except OSError as error:
+        raise BenchmarkError(f"cannot inspect benchmark output {path}: {error}") from error
+    if magic != FLATGEOBUF_MAGIC or len(encoded_header_size) != 4:
+        raise BenchmarkError(f"output does not have a valid FlatGeobuf header: {path}")
+    header_size = int.from_bytes(encoded_header_size, byteorder="little")
+    if (
+        header_size < 8
+        or header_size > FLATGEOBUF_MAX_HEADER_SIZE
+        or size < len(FLATGEOBUF_MAGIC) + 4 + header_size
+    ):
+        raise BenchmarkError(f"output does not have a complete FlatGeobuf header: {path}")
+    return size
+
+
 def validate_parquet(path: Path) -> int:
     try:
         size = path.stat().st_size
@@ -335,6 +362,68 @@ def validate_parquet(path: Path) -> int:
     if size < 12 or header != b"PAR1" or footer != b"PAR1":
         raise BenchmarkError(f"output is not a complete Parquet file: {path}")
     return size
+
+
+def validate_geojson_feature(encoded_feature: bytes, path: Path) -> None:
+    try:
+        feature = json.loads(encoded_feature)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BenchmarkError(
+            f"output contains invalid newline-delimited GeoJSON: {path}"
+        ) from error
+    if (
+        not isinstance(feature, dict)
+        or feature.get("type") != "Feature"
+        or not isinstance(feature.get("geometry"), dict)
+        or not isinstance(feature.get("properties"), dict)
+    ):
+        raise BenchmarkError(f"output contains an invalid GeoJSON feature: {path}")
+
+
+def validate_geojson(path: Path) -> int:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            first_feature = handle.readline()
+            if size == 0:
+                raise BenchmarkError(f"output is an empty GeoJSON sequence: {path}")
+            handle.seek(-1, os.SEEK_END)
+            if handle.read(1) != b"\n":
+                raise BenchmarkError(
+                    f"output does not have a complete newline-delimited GeoJSON record: {path}"
+                )
+
+            feature_end = size - 1
+            cursor = feature_end
+            feature_start = 0
+            while cursor > 0:
+                chunk_start = max(0, cursor - 64 * 1024)
+                handle.seek(chunk_start)
+                chunk = handle.read(cursor - chunk_start)
+                newline_index = chunk.rfind(b"\n")
+                if newline_index >= 0:
+                    feature_start = chunk_start + newline_index + 1
+                    break
+                cursor = chunk_start
+            handle.seek(feature_start)
+            last_feature = handle.read(feature_end - feature_start)
+    except OSError as error:
+        raise BenchmarkError(f"cannot inspect benchmark output {path}: {error}") from error
+
+    validate_geojson_feature(first_feature.rstrip(b"\n"), path)
+    if feature_start != 0:
+        validate_geojson_feature(last_feature, path)
+    return size
+
+
+def validate_output(path: Path, output_format: str) -> int:
+    if output_format == "fgb":
+        return validate_flatgeobuf(path)
+    if output_format == "geoparquet":
+        return validate_parquet(path)
+    if output_format == "geojson":
+        return validate_geojson(path)
+    raise BenchmarkError(f"unsupported output format: {output_format}")
 
 
 def load_and_validate_cli_metrics(path: Path, input_count: int, output_bytes: int) -> dict[str, Any]:
@@ -395,11 +484,13 @@ def run_once(
     temp_dir: Path,
     cli_args: Sequence[str],
     keep_outputs: bool,
+    output_format: str,
 ) -> dict[str, Any]:
     stem = f"{kind}-{index:02d}"
     run_temp_dir = temp_dir / stem
     run_temp_dir.mkdir()
-    output_path = run_dir / f"{stem}.parquet"
+    output_extension = OUTPUT_FORMATS[output_format]["extension"]
+    output_path = run_dir / f"{stem}.{output_extension}"
     metrics_path = run_dir / f"{stem}-cli-metrics.json"
     stdout_path = run_dir / f"{stem}.stdout.log"
     stderr_path = run_dir / f"{stem}.stderr.log"
@@ -421,7 +512,7 @@ def run_once(
         detail = f"\n{stderr_tail}" if stderr_tail else ""
         raise BenchmarkError(f"{kind} {index} exited with code {exit_code}{detail}")
 
-    output_bytes = validate_parquet(output_path)
+    output_bytes = validate_output(output_path, output_format)
     cli_metrics = load_and_validate_cli_metrics(metrics_path, len(inputs), output_bytes)
     total_cpu_seconds = (
         resource_usage["user_cpu_seconds"] + resource_usage["system_cpu_seconds"]
@@ -557,7 +648,7 @@ def safe_label(value: str) -> str:
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Repeat the complete MOJ XML to GeoParquet conversion with validation."
+        description="Repeat complete MOJ XML conversions with format-specific validation."
     )
     parser.add_argument("--input-dir", required=True, type=Path)
     parser.add_argument(
@@ -582,6 +673,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Return success even when measured wall-time CV exceeds the threshold.",
     )
     parser.add_argument("--keep-outputs", action="store_true")
+    parser.add_argument(
+        "--output-format",
+        choices=tuple(OUTPUT_FORMATS),
+        default="fgb",
+        help="Output format to benchmark (default: fgb).",
+    )
     parser.add_argument(
         "--label", default=platform.node(), help="Short environment label stored in the report."
     )
@@ -646,9 +743,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     dataset_manifest = create_dataset_manifest(input_dir, inputs)
     write_json(run_dir / "dataset-manifest.json", dataset_manifest)
     binary_sha256 = sha256_file(binary)
+    output_format_label = OUTPUT_FORMATS[args.output_format]["label"]
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "benchmark": "mojxml-rs end-to-end GeoParquet conversion",
+        "benchmark": f"mojxml-rs end-to-end {output_format_label} conversion",
         "started_at_utc": utc_now(),
         "finished_at_utc": None,
         "host": collect_host_metadata(args.label, input_dir, work_dir),
@@ -667,7 +765,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configuration": {
             "warmup_runs": args.warmups,
             "measured_runs": args.runs,
-            "output_format": "GeoParquet",
+            "output_format": output_format_label,
             "cli_args": args.cli_arg,
             "input_patterns": patterns,
             "output_retained": args.keep_outputs,
@@ -693,6 +791,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     temp_dir=temp_dir,
                     cli_args=args.cli_arg,
                     keep_outputs=args.keep_outputs,
+                    output_format=args.output_format,
                 )
             )
             write_json(partial_path, report)
@@ -708,6 +807,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     temp_dir=temp_dir,
                     cli_args=args.cli_arg,
                     keep_outputs=args.keep_outputs,
+                    output_format=args.output_format,
                 )
             )
             write_json(partial_path, report)

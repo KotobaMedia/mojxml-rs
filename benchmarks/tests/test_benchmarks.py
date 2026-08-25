@@ -34,6 +34,29 @@ class RunTests(unittest.TestCase):
             self.assertNotEqual(manifest["digest"], reversed_manifest["digest"])
             self.assertEqual(manifest["compressed_input_bytes"], 11)
 
+    def test_flatgeobuf_header_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output.fgb"
+            header = b"12345678"
+            path.write_bytes(
+                benchmark_run.FLATGEOBUF_MAGIC
+                + len(header).to_bytes(4, byteorder="little")
+                + header
+            )
+            self.assertEqual(benchmark_run.validate_flatgeobuf(path), 20)
+
+            path.write_bytes(b"not flatgeobuf")
+            with self.assertRaises(benchmark_run.BenchmarkError):
+                benchmark_run.validate_flatgeobuf(path)
+
+            path.write_bytes(
+                benchmark_run.FLATGEOBUF_MAGIC
+                + len(header).to_bytes(4, byteorder="little")
+                + header[:-1]
+            )
+            with self.assertRaises(benchmark_run.BenchmarkError):
+                benchmark_run.validate_flatgeobuf(path)
+
     def test_parquet_magic_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "output.parquet"
@@ -43,6 +66,35 @@ class RunTests(unittest.TestCase):
             path.write_bytes(b"not parquet")
             with self.assertRaises(benchmark_run.BenchmarkError):
                 benchmark_run.validate_parquet(path)
+
+    def test_geojson_sequence_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output.geojson"
+            feature = b'{"type":"Feature","geometry":{},"properties":{}}'
+            path.write_bytes(feature + b"\n" + feature + b"\n")
+            self.assertEqual(benchmark_run.validate_geojson(path), 2 * (len(feature) + 1))
+
+            path.write_bytes(feature)
+            with self.assertRaises(benchmark_run.BenchmarkError):
+                benchmark_run.validate_geojson(path)
+
+    def test_output_format_defaults_to_fgb_and_accepts_geoparquet(self):
+        default_args = benchmark_run.parse_args(
+            ["--input-dir", "input", "--work-dir", "work"]
+        )
+        geoparquet_args = benchmark_run.parse_args(
+            [
+                "--input-dir",
+                "input",
+                "--work-dir",
+                "work",
+                "--output-format",
+                "geoparquet",
+            ]
+        )
+
+        self.assertEqual(default_args.output_format, "fgb")
+        self.assertEqual(geoparquet_args.output_format, "geoparquet")
 
     def test_cli_metrics_validation_rejects_parse_errors(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -101,7 +153,7 @@ class CompareTests(unittest.TestCase):
             "binary": {"version": "mojxml-rs 1.0"},
             "dataset": {"digest": "dataset", "file_count": 1},
             "configuration": {
-                "output_format": "GeoParquet",
+                "output_format": "FlatGeobuf",
                 "cli_args": [],
                 "cache_policy": "warm",
                 "warmup_runs": 1,
