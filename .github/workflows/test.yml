@@ -42,3 +42,7 @@ jobs:
 
       - name: Run test
         run: cargo test --workspace
+
+      - name: Benchmark tooling tests
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s benchmarks/tests

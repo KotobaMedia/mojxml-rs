@@ -12,6 +12,7 @@ use clap::Parser;
 use mojxml_parser::ParseOptions;
 use std::{
     fs::{self, File},
+    io::Write,
     path::PathBuf,
 };
 use writer::WriterOptions;
@@ -55,6 +56,10 @@ struct Cli {
     /// Has effect only when output extension is `.fgb`.
     #[arg(long, default_value_t = false)]
     fgb_no_index: bool,
+
+    /// Write machine-readable processing metrics to a JSON file.
+    #[arg(long, value_name = "FILE")]
+    metrics_json: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -84,10 +89,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting processing files...");
 
-    let file_count =
+    let metrics =
         processor::process_files(&cli.dst_file, cli.src_files, parse_options, writer_options)?;
 
-    println!("Finished processing {} XML file(s).", file_count);
+    if let Some(metrics_path) = &cli.metrics_json {
+        if let Some(parent) = metrics_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
+        let mut metrics_file = File::create(metrics_path)?;
+        serde_json::to_writer_pretty(&mut metrics_file, &metrics)?;
+        writeln!(metrics_file)?;
+    }
+
+    println!(
+        "Finished processing {} XML file(s).",
+        metrics.xml_documents_discovered
+    );
     println!("Destination: {}", cli.dst_file.display());
 
     Ok(())
