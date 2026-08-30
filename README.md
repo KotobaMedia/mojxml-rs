@@ -14,6 +14,16 @@
 * GeoParquet, FlatGeobuf, GeoJSON (newline-delimited) の出力を対応
 * Windows, Linux, macOS それぞれの OS で実行できるバイナリとして提供しています
 
+## 性能
+
+MacBook Pro M5 で全国2026年データを一つの出力ファイルに変換した結果です。
+
+| 出力形式 | 変換時間 | ピークメモリ使用量 |
+| --- | ---: | ---: |
+| GeoParquet | 13分 | 2.5 GB |
+| GeoJSON | 12分 | 2 GB |
+| FlatGeobuf | 19分 | 12 GB |
+
 ## インストール方法
 
 このツールは Rust で書かれていますが、コンパイル済みバイナリも下記のアーキテクチャで用意しています。
