@@ -578,6 +578,9 @@ async function main() {
     "download-geojson",
   ) as HTMLButtonElement | null;
   const testDataButton = document.getElementById("load-test-data") as HTMLButtonElement | null;
+  const testDataOneFileButton = document.getElementById(
+    "load-test-data-one-file",
+  ) as HTMLButtonElement | null;
 
   if (copyrightYearEl) {
     copyrightYearEl.textContent = String(new Date().getFullYear());
@@ -776,42 +779,47 @@ async function main() {
     }
   };
 
-  const loadTestData = async () => {
-    const testDataUrl = await import(`../../testdata/46505-3411-2025.zip?url`);
-    console.log("Test data URL:", testDataUrl);
-
-    if (!testDataButton) {
-      appendStatus("テストデータ読み込みボタンが見つかりません。");
-      return;
-    }
-
-    testDataButton.disabled = true;
-    const revertText = testDataButton.textContent;
-    testDataButton.textContent = "読み込み中...";
+  const loadTestData = async (
+    button: HTMLButtonElement,
+    fileName: string,
+    importTestDataUrl: () => Promise<{ default: string }>,
+  ) => {
+    button.disabled = true;
+    const revertText = button.textContent;
+    button.textContent = "読み込み中...";
 
     try {
       resetStatus("テストデータをダウンロードしています...");
+      const testDataUrl = await importTestDataUrl();
       const response = await fetch(testDataUrl.default);
       if (!response.ok) {
         throw new Error(`Failed to fetch test data (${response.status} ${response.statusText})`);
       }
 
       const blob = await response.blob();
-      const file = new File([blob], "46505-3411-2025.zip", { type: "application/zip" });
+      const file = new File([blob], fileName, { type: "application/zip" });
       await handleFile(file);
     } catch (error) {
       console.error("Failed to load test data:", error);
       appendStatus(`テストデータの読み込みに失敗しました: ${describeError(error)}`);
     } finally {
-      testDataButton.disabled = false;
+      button.disabled = false;
       if (revertText !== null) {
-        testDataButton.textContent = revertText;
+        button.textContent = revertText;
       }
     }
   };
 
   testDataButton?.addEventListener("click", () => {
-    void loadTestData();
+    void loadTestData(testDataButton, "46505-3411-2025.zip", () =>
+      import(`../../testdata/46505-3411-2025.zip?url`),
+    );
+  });
+
+  testDataOneFileButton?.addEventListener("click", () => {
+    void loadTestData(testDataOneFileButton, "46505-3411-56.zip", () =>
+      import(`../../testdata/46505-3411-56.zip?url`),
+    );
   });
 
   const preventDefaults = (event: Event) => {
